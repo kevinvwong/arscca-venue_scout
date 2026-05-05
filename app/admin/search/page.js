@@ -86,6 +86,9 @@ export default function SearchPage() {
   const [batchResults, setBatchResults]   = useState(new Map()); // placeId → score data
   const [batchProgress, setBatchProgress] = useState(0);
 
+  // Auto-search debounce ref
+  const autoSearchTimer = useRef(null);
+
   // Saved search profiles
   const [profiles, setProfiles]           = useState([]);
   const [lastGeoLat, setLastGeoLat]       = useState(null);
@@ -387,7 +390,15 @@ export default function SearchPage() {
           className="input flex-1 min-w-0"
           placeholder="City or ZIP code"
           value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            setSearchInput(val);
+            // Auto-search on complete US ZIP code (5 digits or ZIP+4)
+            if (/^\d{5}(-\d{4})?$/.test(val.trim())) {
+              clearTimeout(autoSearchTimer.current);
+              autoSearchTimer.current = setTimeout(handleSearch, 400);
+            }
+          }}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
         />
 
