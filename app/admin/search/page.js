@@ -4,26 +4,18 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Script from "next/script";
 
 const RADIUS_OPTIONS = [
-  { label: "1 km",  value: 1000 },
-  { label: "2 km",  value: 2000 },
-  { label: "5 km",  value: 5000 },
-  { label: "10 km", value: 10000 },
-  { label: "25 km", value: 25000 },
-];
-
-const TYPE_OPTIONS = [
-  { label: "Parking Lots",        value: "parking" },
-  { label: "Fairgrounds",         value: "fairground" },
-  { label: "Stadiums",            value: "stadium" },
-  { label: "Convention Centers",  value: "convention_center" },
+  { label: "5 mi",  value: 8047 },
+  { label: "10 mi", value: 16093 },
+  { label: "15 mi", value: 24140 },
+  { label: "25 mi", value: 40234 },
 ];
 
 const PIN_COLORS = {
   default:  "#6b7280",
   approved: "#16a34a",
-  active:   "#d97706",  // shortlisted / contacted / responded / site_visit
-  declined: "#dc2626",  // declined / archived
-  added:    "#14b8a6",  // just added this session (teal)
+  active:   "#d97706",
+  declined: "#dc2626",
+  added:    "#14b8a6",
 };
 
 const ACTIVE_STATUSES = new Set(["shortlisted", "contacted", "responded", "site_visit"]);
@@ -39,7 +31,6 @@ function pinColor(existingStatus, inAddedSet) {
 }
 
 function makeMarkerIcon(color) {
-  // Simple SVG circle pin
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">
     <path d="M12 0C5.373 0 0 5.373 0 12c0 8.25 12 20 12 20S24 20.25 24 12C24 5.373 18.627 0 12 0z"
       fill="${color}" stroke="white" stroke-width="1.5"/>
@@ -63,33 +54,50 @@ function statusLabel(s) {
   return s === "site_visit" ? "Site Visit" : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function getLotDisplayName(candidate) {
+  if (candidate.name) return candidate.name;
+  const tags = candidate.tags || {};
+  if (tags.amenity === "parking") return "Parking Lot";
+  if (tags.leisure === "stadium") return "Stadium";
+  if (tags.leisure === "sports_centre") return "Sports Center";
+  if (tags.leisure === "fairground") return "Fairground";
+  if (tags.leisure === "race_track") return "Racetrack";
+  if (tags.amenity === "events_venue") return "Events Venue";
+  if (tags.landuse === "commercial") return "Commercial Area";
+  if (tags.landuse === "industrial") return "Industrial Area";
+  if (tags.landuse === "retail") return "Retail Area";
+  return "Unnamed Lot";
+}
+
+function ScoreBar({ label, value, max = 100 }) {
+  const pct = Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+  const color = pct >= 70 ? "bg-green-500" : pct >= 45 ? "bg-yellow-500" : "bg-red-400";
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-0.5">
+        <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">{label}</span>
+        <span className="text-xs font-bold tabular-nums text-gray-700">{value ?? "—"}</span>
+      </div>
+      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export default function SearchPage() {
-  // Search bar state
-  const [searchInput, setSearchInput]   = useState("");
-  const [radius, setRadius]             = useState(5000);
-  const [placeType, setPlaceType]       = useState("parking");
-
-  // Results state
-  const [places, setPlaces]             = useState([]);
+  const [searchInput, setSearchInput]     = useState("");
+  const [radius, setRadius]               = useState(16093);
+  const [places, setPlaces]               = useState([]);
   const [selectedPlace, setSelectedPlace] = useState(null);
-  const [addedPlaceIds, setAddedPlaceIds] = useState(new Set());
+  const [addedOsmIds, setAddedOsmIds]     = useState(new Set());
+  const [mapLoaded, setMapLoaded]         = useState(false);
+  const [searching, setSearching]         = useState(false);
+  const [error, setError]                 = useState(null);
+  const [addingToDb, setAddingToDb]       = useState(false);
+  const [addedMsg, setAddedMsg]           = useState(false);
+  const autoSearchTimer                   = useRef(null);
 
-  // UI state
-  const [mapLoaded, setMapLoaded]       = useState(false);
-  const [searching, setSearching]       = useState(false);
-  const [error, setError]               = useState(null);
-  const [addingToDb, setAddingToDb]     = useState(false);
-  const [addedMsg, setAddedMsg]         = useState(false);
-
-  // Batch scoring state
-  const [batchScoring, setBatchScoring]   = useState(false);
-  const [batchResults, setBatchResults]   = useState(new Map()); // placeId → score data
-  const [batchProgress, setBatchProgress] = useState(0);
-
-  // Auto-search debounce ref
-  const autoSearchTimer = useRef(null);
-
-  // Saved search profiles
   const [profiles, setProfiles]           = useState([]);
   const [lastGeoLat, setLastGeoLat]       = useState(null);
   const [lastGeoLng, setLastGeoLng]       = useState(null);
@@ -97,13 +105,11 @@ export default function SearchPage() {
   const [saveName, setSaveName]           = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // Map refs — stored in refs, not state, to avoid re-render loops
-  const mapRef      = useRef(null);   // DOM element
-  const mapInstance = useRef(null);   // google.maps.Map
-  const markersRef  = useRef([]);     // current markers array
-  const mapsApi     = useRef(null);   // google.maps namespace
+  const mapRef      = useRef(null);
+  const mapInstance = useRef(null);
+  const markersRef  = useRef([]);
+  const mapsApi     = useRef(null);
 
-  // Initialize map once the Maps JS script has loaded
   function initMap() {
     if (!mapRef.current || mapInstance.current) return;
     try {
@@ -128,7 +134,6 @@ export default function SearchPage() {
     }
   }
 
-  // Load saved search profiles on mount
   useEffect(() => {
     fetch("/api/admin/search/profiles")
       .then((r) => r.json())
@@ -136,12 +141,11 @@ export default function SearchPage() {
       .catch(() => {});
   }, []);
 
-  // Update a single marker's icon (e.g. after adding to DB)
-  const refreshMarkerIcon = useCallback((placeId, newAddedSet) => {
+  const refreshMarkerIcon = useCallback((osmId, newAddedSet) => {
     markersRef.current.forEach((m) => {
-      if (m._placeId === placeId) {
-        const place = places.find((p) => p.placeId === placeId);
-        const icon = makeMarkerIcon(pinColor(place?.existingStatus, newAddedSet.has(placeId)));
+      if (m._osmId === osmId) {
+        const place = places.find((p) => p.osmId === osmId);
+        const icon = makeMarkerIcon(pinColor(place?.existingStatus, newAddedSet.has(osmId)));
         m.setIcon({
           url: icon.url,
           scaledSize: new mapsApi.current.Size(icon.scaledSize.width, icon.scaledSize.height),
@@ -151,47 +155,41 @@ export default function SearchPage() {
     });
   }, [places]);
 
-  // Plot markers whenever places changes
   useEffect(() => {
     if (!mapInstance.current || !mapsApi.current) return;
-    const google = { maps: mapsApi.current };
+    const gmaps = mapsApi.current;
 
-    // Clear old markers
     markersRef.current.forEach((m) => m.setMap(null));
     markersRef.current = [];
 
     if (places.length === 0) return;
 
-    const bounds = new google.maps.LatLngBounds();
+    const bounds = new gmaps.LatLngBounds();
 
     places.forEach((place) => {
-      const iconDef = makeMarkerIcon(pinColor(place.existingStatus, addedPlaceIds.has(place.placeId)));
-
-      const marker = new google.maps.Marker({
+      const iconDef = makeMarkerIcon(pinColor(place.existingStatus, addedOsmIds.has(place.osmId)));
+      const marker = new gmaps.Marker({
         position: { lat: place.lat, lng: place.lng },
         map: mapInstance.current,
-        title: place.name,
+        title: getLotDisplayName(place),
         icon: {
           url: iconDef.url,
-          scaledSize: new google.maps.Size(iconDef.scaledSize.width, iconDef.scaledSize.height),
-          anchor: new google.maps.Point(iconDef.anchor.x, iconDef.anchor.y),
+          scaledSize: new gmaps.Size(iconDef.scaledSize.width, iconDef.scaledSize.height),
+          anchor: new gmaps.Point(iconDef.anchor.x, iconDef.anchor.y),
         },
       });
-
-      marker._placeId = place.placeId;
-
+      marker._osmId = place.osmId;
       marker.addListener("click", () => {
         setSelectedPlace(place);
         setAddedMsg(false);
         mapInstance.current.panTo({ lat: place.lat, lng: place.lng });
       });
-
       markersRef.current.push(marker);
       bounds.extend({ lat: place.lat, lng: place.lng });
     });
 
     mapInstance.current.fitBounds(bounds);
-  }, [places]); // addedPlaceIds intentionally excluded — refreshMarkerIcon handles per-pin updates
+  }, [places]);
 
   const handleSearch = useCallback(async (overrideQuery) => {
     const q = (overrideQuery ?? searchInput).trim();
@@ -203,7 +201,6 @@ export default function SearchPage() {
     setAddedMsg(false);
 
     try {
-      // Step 1: geocode
       const geoRes = await fetch(
         `/api/admin/search/geocode?address=${encodeURIComponent(q)}`
       );
@@ -215,58 +212,58 @@ export default function SearchPage() {
       setLastGeoLng(lng);
       setShowSaveForm(false);
 
-      // Step 2: nearby places
-      const placesRes = await fetch(
-        `/api/admin/search?lat=${lat}&lng=${lng}&radius=${radius}&type=${placeType}`
+      const scanRes = await fetch(
+        `/api/admin/search?lat=${lat}&lng=${lng}&radius=${radius}`
       );
-      const placesData = await placesRes.json();
-      if (!placesRes.ok) throw new Error(placesData.error || "Places search failed");
+      const scanData = await scanRes.json();
+      if (!scanRes.ok) throw new Error(scanData.error || "Area scan failed");
 
-      setPlaces(placesData.places || []);
+      setPlaces(scanData.places || []);
 
-      if ((placesData.places || []).length === 0) {
-        setError("No places found. Try a different location or type.");
+      if ((scanData.places || []).length === 0) {
+        setError("No candidate lots found in this area. Try a larger radius.");
       }
     } catch (err) {
       setError(err.message);
     } finally {
       setSearching(false);
     }
-  }, [searchInput, radius, placeType]);
+  }, [searchInput, radius]);
 
   const handleAddToPipeline = useCallback(async () => {
     if (!selectedPlace) return;
     setAddingToDb(true);
+
+    const displayName = getLotDisplayName(selectedPlace);
 
     try {
       const res = await fetch("/api/admin/venues", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: selectedPlace.name,
-          address: selectedPlace.address,
+          name: displayName,
           lat: selectedPlace.lat,
           lng: selectedPlace.lng,
-          google_place_id: selectedPlace.placeId,
-          source: "google_places",
+          google_place_id: selectedPlace.osmId,
+          source: "osm",
           status: "candidate",
+          estimated_acres: selectedPlace.estimatedAcres ?? null,
+          surface: selectedPlace.surfaceType ?? null,
         }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to add venue");
 
-      const newSet = new Set(addedPlaceIds);
-      newSet.add(selectedPlace.placeId);
-      setAddedPlaceIds(newSet);
+      const newSet = new Set(addedOsmIds);
+      newSet.add(selectedPlace.osmId);
+      setAddedOsmIds(newSet);
       setAddedMsg(true);
+      refreshMarkerIcon(selectedPlace.osmId, newSet);
 
-      // Update the marker icon immediately
-      refreshMarkerIcon(selectedPlace.placeId, newSet);
-
-      // Fire-and-forget AI scoring — don't await, don't block the UI
+      // Store the AI assessment if we have scores
       const venueId = data.venue?.id;
-      if (venueId) {
+      if (venueId && selectedPlace.aiScore != null) {
         fetch(`/api/admin/venues/${venueId}/score`, { method: "POST" }).catch(() => {});
       }
     } catch (err) {
@@ -274,7 +271,7 @@ export default function SearchPage() {
     } finally {
       setAddingToDb(false);
     }
-  }, [selectedPlace, addedPlaceIds, refreshMarkerIcon]);
+  }, [selectedPlace, addedOsmIds, refreshMarkerIcon]);
 
   const saveProfile = useCallback(async () => {
     if (!lastGeoLat || !lastGeoLng || !saveName.trim()) return;
@@ -288,7 +285,6 @@ export default function SearchPage() {
           center_lat: lastGeoLat,
           center_lng: lastGeoLng,
           radius_miles: Math.round(radius / 1609),
-          lot_types: [placeType],
         }),
       });
       const data = await res.json();
@@ -300,7 +296,7 @@ export default function SearchPage() {
     } finally {
       setSavingProfile(false);
     }
-  }, [lastGeoLat, lastGeoLng, saveName, radius, placeType]);
+  }, [lastGeoLat, lastGeoLng, saveName, radius]);
 
   const deleteProfile = useCallback(async (id) => {
     await fetch(`/api/admin/search/profiles/${id}`, { method: "DELETE" });
@@ -309,10 +305,11 @@ export default function SearchPage() {
 
   const replayProfile = useCallback((profile) => {
     setSearchInput(profile.name);
-    setRadius((profile.radius_miles || 30) * 1609);
+    setRadius((profile.radius_miles || 10) * 1609);
     fetch(`/api/admin/search/profiles/${profile.id}`, { method: "PATCH" }).catch(() => {});
-    // Trigger search with the profile's stored center directly
-    fetch(`/api/admin/search?lat=${profile.center_lat}&lng=${profile.center_lng}&radius=${(profile.radius_miles || 30) * 1609}&type=${placeType}`)
+    fetch(
+      `/api/admin/search?lat=${profile.center_lat}&lng=${profile.center_lng}&radius=${(profile.radius_miles || 10) * 1609}`
+    )
       .then((r) => r.json())
       .then((d) => {
         if (d.places) {
@@ -322,58 +319,9 @@ export default function SearchPage() {
         }
       })
       .catch(() => {});
-  }, [placeType]);
+  }, []);
 
-  const runBatchScore = useCallback(async () => {
-    // Only score places not yet in batchResults and without an existingStatus
-    const unscored = places.filter(
-      (p) => !batchResults.has(p.placeId) && !p.existingStatus
-    ).slice(0, 10);
-
-    if (unscored.length === 0) return;
-
-    setBatchScoring(true);
-    setBatchProgress(0);
-
-    try {
-      const res = await fetch("/api/admin/search/score-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          places: unscored.map((p) => ({
-            placeId: p.placeId,
-            name: p.name,
-            address: p.address,
-            lat: p.lat,
-            lng: p.lng,
-          })),
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Batch scoring failed");
-
-      setBatchResults((prev) => {
-        const next = new Map(prev);
-        for (const result of data.results ?? []) {
-          next.set(result.placeId, result);
-        }
-        return next;
-      });
-
-      setBatchProgress(100);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBatchScoring(false);
-    }
-  }, [places, batchResults]);
-
-  const unscoredCount = places.filter(
-    (p) => !batchResults.has(p.placeId) && !p.existingStatus
-  ).length;
-
-  const alreadyAdded = selectedPlace && addedPlaceIds.has(selectedPlace.placeId);
+  const alreadyAdded = selectedPlace && addedOsmIds.has(selectedPlace.osmId);
   const alreadyInDb  = selectedPlace && selectedPlace.existingStatus != null;
 
   return (
@@ -384,7 +332,7 @@ export default function SearchPage() {
       onLoad={initMap}
     />
     <div className="flex flex-col" style={{ height: "calc(100vh - 112px)" }}>
-      {/* Search bar row */}
+      {/* Search bar */}
       <div className="flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200 shrink-0">
         <input
           type="text"
@@ -394,7 +342,6 @@ export default function SearchPage() {
           onChange={(e) => {
             const val = e.target.value;
             setSearchInput(val);
-            // Auto-search on complete US ZIP code (5 digits or ZIP+4)
             if (/^\d{5}(-\d{4})?$/.test(val.trim())) {
               clearTimeout(autoSearchTimer.current);
               autoSearchTimer.current = setTimeout(() => handleSearch(val.trim()), 400);
@@ -404,21 +351,11 @@ export default function SearchPage() {
         />
 
         <select
-          className="input w-36 shrink-0"
+          className="input w-28 shrink-0"
           value={radius}
           onChange={(e) => setRadius(Number(e.target.value))}
         >
           {RADIUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-
-        <select
-          className="input w-48 shrink-0"
-          value={placeType}
-          onChange={(e) => setPlaceType(e.target.value)}
-        >
-          {TYPE_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
@@ -431,36 +368,9 @@ export default function SearchPage() {
           {searching && (
             <span className="w-5 h-5 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
           )}
-          Search
+          {searching ? "Analyzing…" : "Search"}
         </button>
-
-        {places.length > 0 && (
-          <button
-            className="btn btn-outline shrink-0 flex items-center gap-2 text-teal-600 border-teal-300 hover:border-teal-500"
-            onClick={runBatchScore}
-            disabled={batchScoring || unscoredCount === 0}
-          >
-            {batchScoring ? (
-              <>
-                <span className="w-4 h-4 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
-                Scoring…
-              </>
-            ) : (
-              `Score All (${unscoredCount})`
-            )}
-          </button>
-        )}
       </div>
-
-      {/* Batch scoring progress bar */}
-      {batchScoring && (
-        <div className="h-1 bg-gray-100 shrink-0">
-          <div
-            className="h-1 bg-teal-500 transition-all duration-300"
-            style={{ width: `${batchProgress}%` }}
-          />
-        </div>
-      )}
 
       {/* Saved searches strip */}
       {(profiles.length > 0 || (places.length > 0 && lastGeoLat)) && (
@@ -499,27 +409,38 @@ export default function SearchPage() {
         </div>
       )}
 
-      {/* Error banner */}
       {error && (
-        <div className="notice notice-error mx-6 mt-3 shrink-0" role="alert">
-          {error}
-        </div>
+        <div className="notice notice-error mx-6 mt-3 shrink-0" role="alert">{error}</div>
       )}
 
       {/* Map + detail panel */}
       <div className="flex flex-1 min-h-0 relative">
-        {/* Map */}
         <div ref={mapRef} className="flex-1 min-w-0 h-full" />
 
-        {/* Empty state overlay (shown before any search) */}
+        {/* Empty state */}
         {!searching && places.length === 0 && !error && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="bg-white/90 rounded-xl px-8 py-6 text-center shadow-sm border border-gray-200 max-w-sm">
               <p className="text-sm font-medium text-gray-700">
-                Search for a city or ZIP code to find candidate venues
+                Search a city or ZIP to scan for large lots
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                Results appear as pins on the map
+                Satellite imagery analyzed automatically for each candidate
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Scanning overlay */}
+        {searching && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="bg-white/90 rounded-xl px-8 py-6 text-center shadow-sm border border-gray-200 max-w-sm">
+              <div className="flex justify-center mb-3">
+                <span className="w-8 h-8 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
+              </div>
+              <p className="text-sm font-medium text-gray-700">Scanning area…</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Analyzing satellite imagery for large paved lots
               </p>
             </div>
           </div>
@@ -528,20 +449,20 @@ export default function SearchPage() {
         {/* Detail panel */}
         {selectedPlace && (
           <div className="w-80 shrink-0 bg-white border-l border-gray-200 overflow-y-auto flex flex-col">
-            {/* Panel header */}
+            {/* Header */}
             <div className="flex items-start justify-between p-4 border-b border-gray-100">
               <div className="flex-1 min-w-0 pr-2">
                 <p className="text-lg font-semibold text-gray-900 leading-snug">
-                  {selectedPlace.name}
+                  {getLotDisplayName(selectedPlace)}
                 </p>
-                <p className="text-sm text-gray-500 mt-0.5 leading-snug">
-                  {selectedPlace.address}
+                <p className="text-xs text-gray-400 mt-0.5 tabular-nums">
+                  {selectedPlace.lat.toFixed(5)}, {selectedPlace.lng.toFixed(5)}
                 </p>
               </div>
               <button
                 className="text-gray-400 hover:text-gray-600 text-xl leading-none shrink-0 mt-0.5"
                 onClick={() => { setSelectedPlace(null); setAddedMsg(false); }}
-                aria-label="Close detail panel"
+                aria-label="Close"
               >
                 ×
               </button>
@@ -558,95 +479,83 @@ export default function SearchPage() {
               />
             </div>
 
-            {/* Batch score card */}
-            {batchResults.has(selectedPlace.placeId) && (() => {
-              const s = batchResults.get(selectedPlace.placeId);
-              if (s.status === "error") {
-                return (
-                  <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
-                    Scoring failed: {s.error}
-                  </div>
-                );
-              }
-              const scoreColor =
-                s.composite_score >= 70
-                  ? "text-green-700"
-                  : s.composite_score >= 45
-                  ? "text-yellow-700"
-                  : "text-red-700";
-              return (
-                <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 grid grid-cols-3 gap-2 text-center">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">AI Score</p>
-                    <p className={`text-lg font-bold tabular-nums leading-none ${scoreColor}`}>
-                      {s.composite_score ?? "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Surface</p>
-                    <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
-                      {s.surface_type ?? "unknown"}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Est. Acres</p>
-                    <p className="text-sm font-semibold tabular-nums text-gray-800 leading-none mt-0.5">
-                      {s.estimated_acres != null ? s.estimated_acres.toFixed(1) : "—"}
-                    </p>
-                  </div>
+            {/* Score card */}
+            <div className="mx-4 mt-3 px-3 py-3 rounded-lg bg-gray-50 border border-gray-200 space-y-2.5">
+              {/* Composite score */}
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Composite Score</span>
+                <span className={`text-xl font-bold tabular-nums leading-none ${
+                  (selectedPlace.compositeScore ?? 0) >= 70 ? "text-green-700" :
+                  (selectedPlace.compositeScore ?? 0) >= 45 ? "text-yellow-700" : "text-red-600"
+                }`}>
+                  {selectedPlace.compositeScore ?? "—"}
+                </span>
+              </div>
+
+              <ScoreBar label="AI Suitability" value={selectedPlace.aiScore} />
+              <ScoreBar label="Size" value={selectedPlace.estimatedAcres != null
+                ? Math.min(100, Math.round((selectedPlace.estimatedAcres / 10) * 100))
+                : null} />
+
+              {/* Surface + acres */}
+              <div className="flex gap-4 pt-1">
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Surface</p>
+                  <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
+                    {selectedPlace.surfaceType ?? "unknown"}
+                  </span>
                 </div>
-              );
-            })()}
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Est. Acres</p>
+                  <p className="text-sm font-semibold tabular-nums text-gray-800 mt-0.5">
+                    {selectedPlace.estimatedAcres != null ? selectedPlace.estimatedAcres.toFixed(1) : "—"}
+                  </p>
+                </div>
+                {selectedPlace.confidence && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Confidence</p>
+                    <p className="text-xs text-gray-600 mt-0.5 capitalize">{selectedPlace.confidence}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Obstacles */}
+            {selectedPlace.obstacles?.length > 0 && (
+              <div className="px-4 pt-3">
+                <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-1.5">Obstacles</p>
+                <div className="flex flex-wrap gap-1">
+                  {selectedPlace.obstacles.map((o, i) => (
+                    <span key={i} className="bg-orange-50 text-orange-700 border border-orange-200 text-xs rounded-full px-2 py-0.5">
+                      {o}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* AI notes */}
+            {selectedPlace.assessmentNotes && (
+              <div className="px-4 pt-3">
+                <p className="text-xs text-gray-500 leading-relaxed">{selectedPlace.assessmentNotes}</p>
+              </div>
+            )}
 
             {/* Details */}
-            <div className="px-4 py-4 space-y-3 flex-1">
-              {/* Rating */}
-              {selectedPlace.rating != null && (
-                <div className="text-sm text-gray-700">
-                  <span className="text-yellow-500">★</span>{" "}
-                  <span className="font-medium tabular-nums">{selectedPlace.rating.toFixed(1)}</span>
-                  {selectedPlace.userRatingsTotal != null && (
-                    <span className="text-gray-400 ml-1">
-                      ({selectedPlace.userRatingsTotal.toLocaleString()} reviews)
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* Types */}
-              {selectedPlace.types && selectedPlace.types.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {selectedPlace.types
-                    .filter((t) => t !== "point_of_interest" && t !== "establishment")
-                    .slice(0, 5)
-                    .map((t) => (
-                      <span
-                        key={t}
-                        className="inline-block bg-gray-100 text-gray-600 text-xs rounded-full px-2 py-0.5"
-                      >
-                        {t.replace(/_/g, " ")}
-                      </span>
-                    ))}
-                </div>
-              )}
-
-              {/* Existing status chip */}
+            <div className="px-4 py-3 space-y-2 flex-1">
               {alreadyInDb && !alreadyAdded && (
                 <div>
-                  <span
-                    className={`inline-block text-xs font-semibold uppercase tracking-wide rounded-full px-3 py-1 ${statusBadgeClass(selectedPlace.existingStatus)}`}
-                  >
+                  <span className={`inline-block text-xs font-semibold uppercase tracking-wide rounded-full px-3 py-1 ${statusBadgeClass(selectedPlace.existingStatus)}`}>
                     {statusLabel(selectedPlace.existingStatus)}
                   </span>
                 </div>
               )}
 
-              {/* Google Maps link */}
               <a
-                href={`https://www.google.com/maps/place/?q=place_id:${selectedPlace.placeId}`}
+                href={`https://www.google.com/maps/@${selectedPlace.lat},${selectedPlace.lng},18z`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm text-brand-500 hover:text-brand-600 underline underline-offset-2"
+                className="text-sm text-teal-600 hover:text-teal-700 underline underline-offset-2"
               >
                 View on Google Maps ↗
               </a>
@@ -655,9 +564,7 @@ export default function SearchPage() {
             {/* Action footer */}
             <div className="px-4 pb-5 shrink-0">
               {alreadyAdded ? (
-                <p className="text-sm font-medium text-teal-600">
-                  Added to pipeline
-                </p>
+                <p className="text-sm font-medium text-teal-600">Added to pipeline</p>
               ) : alreadyInDb ? (
                 <p className="text-sm text-gray-500 italic">Already in pipeline</p>
               ) : (

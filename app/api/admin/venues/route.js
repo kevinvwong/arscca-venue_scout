@@ -88,6 +88,7 @@ export async function POST(req) {
     lat, lng, estimated_acres, lot_type, surface,
     notes, owner_name, owner_email, owner_phone,
     region, status: bodyStatus,
+    source: bodySource, google_place_id,
   } = body;
 
   if (!name?.trim()) {
@@ -100,12 +101,15 @@ export async function POST(req) {
   const VALID_STATUSES = ["candidate","shortlisted","contacted","responded","site_visit","approved","declined","archived"];
   const status = VALID_STATUSES.includes(bodyStatus) ? bodyStatus : "candidate";
 
+  const VALID_SOURCES = ["google_places", "osm", "manual"];
+  const source = VALID_SOURCES.includes(bodySource) ? bodySource : "manual";
+
   const result = await sql`
     INSERT INTO venues (
       name, address, city, state, zip, lat, lng,
       estimated_acres, lot_type, surface, notes,
       owner_name, owner_email, owner_phone, region, status,
-      source, added_by
+      source, google_place_id, added_by
     ) VALUES (
       ${name.trim()},
       ${address || null}, ${city || null}, ${state || null}, ${zip || null},
@@ -113,7 +117,7 @@ export async function POST(req) {
       ${estimated_acres ? Number(estimated_acres) : null},
       ${lot_type || null}, ${surface || null}, ${notes || null},
       ${owner_name || null}, ${owner_email || null}, ${owner_phone || null},
-      ${region || null}, ${status}, 'manual', ${addedBy}
+      ${region || null}, ${status}, ${source}, ${google_place_id || null}, ${addedBy}
     )
     RETURNING *
   `;
