@@ -56,6 +56,9 @@ export default function VenuesPage() {
   const [saveError, setSaveError]       = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [editForm, setEditForm]         = useState({});
+  const [scoring, setScoring]           = useState(false);
+  const [scoreResult, setScoreResult]   = useState(null);
+  const [scoreError, setScoreError]     = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +86,9 @@ export default function VenuesPage() {
     setEditForm({ ...venue });
     setSaveError("");
     setDeleteConfirm(false);
+    setScoring(false);
+    setScoreResult(null);
+    setScoreError(null);
   }
 
   function closeEdit() {
@@ -120,6 +126,24 @@ export default function VenuesPage() {
       closeEdit();
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function runAiScore() {
+    setScoring(true);
+    setScoreResult(null);
+    setScoreError(null);
+    try {
+      const res  = await fetch(`/api/admin/venues/${selected.id}/score`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Scoring failed.");
+      setScoreResult(data.assessment);
+      // Reload venues list so composite_score pill updates in the table
+      load();
+    } catch (e) {
+      setScoreError(e.message);
+    } finally {
+      setScoring(false);
     }
   }
 
@@ -261,6 +285,106 @@ export default function VenuesPage() {
               <button onClick={closeEdit} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
             </div>
             <div className="px-6 py-5 space-y-4">
+              {/* AI Scoring */}
+              <div className="pb-1">
+                <button
+                  onClick={runAiScore}
+                  disabled={scoring}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-60 transition-colors"
+                >
+                  {scoring ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-teal-200 border-t-white rounded-full animate-spin inline-block" />
+                      Scoring…
+                    </>
+                  ) : (
+                    "Score with AI"
+                  )}
+                </button>
+
+                {scoreError && (
+                  <div className="mt-2 notice-error text-xs" role="alert">{scoreError}</div>
+                )}
+
+                {scoreResult && (
+                  <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-2 text-sm">
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle block mb-0.5">
+                          AI Score
+                        </span>
+                        <span className={`text-2xl font-bold tabular-nums ${
+                          scoreResult.suitability_score >= 70 ? "text-green-700" :
+                          scoreResult.suitability_score >= 40 ? "text-yellow-700" :
+                          "text-red-700"
+                        }`}>
+                          {scoreResult.suitability_score ?? "—"}
+                        </span>
+                      </div>
+                      {scoreResult.composite_score != null && (
+                        <div>
+                          <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle block mb-0.5">
+                            Composite
+                          </span>
+                          <span className={`text-2xl font-bold tabular-nums ${
+                            scoreResult.composite_score >= 70 ? "text-green-700" :
+                            scoreResult.composite_score >= 40 ? "text-yellow-700" :
+                            "text-red-700"
+                          }`}>
+                            {scoreResult.composite_score}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {scoreResult.surface_type && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
+                          Surface
+                        </span>
+                        <span className="inline-flex items-center rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">
+                          {scoreResult.surface_type}
+                        </span>
+                      </div>
+                    )}
+
+                    {scoreResult.estimated_total_acres != null && (
+                      <div>
+                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
+                          Est. Acres
+                        </span>
+                        <span className="ml-2 tabular-nums text-gray-800">
+                          {scoreResult.estimated_total_acres}
+                        </span>
+                      </div>
+                    )}
+
+                    {scoreResult.obstacle_types?.length > 0 && (
+                      <div>
+                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
+                          Obstacles
+                        </span>
+                        <span className="ml-2 text-gray-700">
+                          {scoreResult.obstacle_types.join(", ")}
+                        </span>
+                      </div>
+                    )}
+
+                    {scoreResult.assessment_notes && (
+                      <p className="italic text-gray-600 text-xs leading-relaxed">
+                        {scoreResult.assessment_notes}
+                      </p>
+                    )}
+
+                    {scoreResult.confidence && (
+                      <p className="text-[11px] text-ink-subtle">
+                        Confidence: {scoreResult.confidence}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {saveError && <div className="notice-error" role="alert">{saveError}</div>}
 
               <Field label="Status">
