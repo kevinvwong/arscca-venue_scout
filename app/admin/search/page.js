@@ -379,7 +379,7 @@ export default function SearchPage() {
   return (
     <>
     <Script
-      src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=maps,marker&callback=Function.prototype`}
+      src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=maps,marker&loading=async&callback=Function.prototype`}
       strategy="afterInteractive"
       onLoad={initMap}
     />
