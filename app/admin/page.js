@@ -60,6 +60,7 @@ export default function VenuesPage() {
   const [scoring, setScoring]           = useState(false);
   const [scoreResult, setScoreResult]   = useState(null);
   const [scoreError, setScoreError]     = useState(null);
+  const [stats, setStats]                   = useState(null);
   const [fetchingPlaces, setFetchingPlaces] = useState(false);
   const [placesError, setPlacesError]       = useState(null);
   const [placesWebsite, setPlacesWebsite]   = useState(null);
@@ -91,6 +92,13 @@ export default function VenuesPage() {
   }, [filterStatus, filterState, search]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetch("/api/admin/stats")
+      .then((r) => r.json())
+      .then((d) => { if (d.stats) setStats(d.stats); })
+      .catch(() => {});
+  }, []);
 
   function openEdit(venue) {
     setSelected(venue);
@@ -258,6 +266,42 @@ export default function VenuesPage() {
         </div>
         <a href="/admin/venues/new" className="btn-primary">+ Add venue</a>
       </div>
+
+      {/* Stats overview row */}
+      <div className="grid grid-cols-3 md:grid-cols-5 gap-3 mb-4">
+        {[
+          { key: "total",           label: "Total Venues" },
+          { key: "scored",          label: "Scored" },
+          { key: "ownerIdentified", label: "Owner ID'd" },
+          { key: "outreachSent",    label: "Outreach Sent" },
+          { key: "approved",        label: "Approved" },
+        ].map(({ key, label }) => (
+          <div key={key} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+            {stats === null ? (
+              <div className="animate-pulse bg-gray-100 h-8 w-16 rounded mb-2" />
+            ) : (
+              <div className={`text-2xl font-bold tabular-nums ${
+                key === "approved" && stats[key] > 0 ? "text-green-700" : "text-gray-900"
+              }`}>
+                {stats[key] ?? 0}
+              </div>
+            )}
+            <div className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle mt-1">
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Follow-up alert banner */}
+      {stats?.followUpAlerts > 0 && (
+        <div className="notice notice-warn mb-4">
+          {stats.followUpAlerts} venue{stats.followUpAlerts === 1 ? "" : "s"} contacted over 7 days ago with no response.{" "}
+          <a href="/admin/pipeline" className="font-semibold underline underline-offset-2">
+            Review in Pipeline →
+          </a>
+        </div>
+      )}
 
       {/* Status summary pills */}
       <div className="flex flex-wrap gap-2 mb-6">
