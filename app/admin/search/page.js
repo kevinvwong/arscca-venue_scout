@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Loader } from "@googlemaps/js-api-loader";
+import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 
 const RADIUS_OPTIONS = [
   { label: "1 km",  value: 1000 },
@@ -105,32 +105,32 @@ export default function SearchPage() {
 
   // Initialize map on mount
   useEffect(() => {
-    const loader = new Loader({
-      apiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
-      libraries: ["places"],
-    });
+    setOptions({ apiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "" });
 
-    loader.load().then((google) => {
-      mapsApi.current = google.maps;
+    Promise.all([importLibrary("maps"), importLibrary("marker")])
+      .then(([{ Map, MapTypeControlStyle }, _marker]) => {
+        // After importLibrary, window.google.maps is fully populated
+        mapsApi.current = window.google.maps;
 
-      const map = new google.maps.Map(mapRef.current, {
-        center: { lat: 33.749, lng: -84.388 },
-        zoom: 11,
-        mapTypeId: "roadmap",
-        mapTypeControl: true,
-        mapTypeControlOptions: {
-          style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
-          mapTypeIds: ["roadmap", "satellite"],
-        },
-        fullscreenControl: false,
-        streetViewControl: false,
+        const map = new Map(mapRef.current, {
+          center: { lat: 33.749, lng: -84.388 },
+          zoom: 11,
+          mapTypeId: "roadmap",
+          mapTypeControl: true,
+          mapTypeControlOptions: {
+            style: MapTypeControlStyle.HORIZONTAL_BAR,
+            mapTypeIds: ["roadmap", "satellite"],
+          },
+          fullscreenControl: false,
+          streetViewControl: false,
+        });
+
+        mapInstance.current = map;
+        setMapLoaded(true);
+      })
+      .catch((err) => {
+        setError("Failed to load Google Maps: " + err.message);
       });
-
-      mapInstance.current = map;
-      setMapLoaded(true);
-    }).catch((err) => {
-      setError("Failed to load Google Maps: " + err.message);
-    });
   }, []);
 
   // Load saved search profiles on mount
