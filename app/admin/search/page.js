@@ -430,7 +430,7 @@ export default function SearchPage() {
                 Search a city or ZIP to scan for large lots
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                Satellite imagery analyzed automatically for each candidate
+                Shows lots ≥ 125,000 sq ft · satellite imagery analyzed for each
               </p>
             </div>
           </div>
