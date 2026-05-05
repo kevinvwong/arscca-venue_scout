@@ -104,18 +104,18 @@ export default function SearchPage() {
   const mapsApi     = useRef(null);   // google.maps namespace
 
   // Initialize map once the Maps JS script has loaded
-  function initMap() {
+  async function initMap() {
     if (!mapRef.current || mapInstance.current) return;
     try {
-      const gmaps = window.google.maps;
-      mapsApi.current = gmaps;
-      const map = new gmaps.Map(mapRef.current, {
+      const { Map, MapTypeControlStyle } = await window.google.maps.importLibrary("maps");
+      mapsApi.current = window.google.maps;
+      const map = new Map(mapRef.current, {
         center: { lat: 33.749, lng: -84.388 },
         zoom: 11,
         mapTypeId: "roadmap",
         mapTypeControl: true,
         mapTypeControlOptions: {
-          style: gmaps.MapTypeControlStyle.HORIZONTAL_BAR,
+          style: MapTypeControlStyle.HORIZONTAL_BAR,
           mapTypeIds: ["roadmap", "satellite"],
         },
         fullscreenControl: false,
