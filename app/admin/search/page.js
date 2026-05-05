@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
+import Script from "next/script";
 
 const RADIUS_OPTIONS = [
   { label: "1 km",  value: 1000 },
@@ -103,35 +103,30 @@ export default function SearchPage() {
   const markersRef  = useRef([]);     // current markers array
   const mapsApi     = useRef(null);   // google.maps namespace
 
-  // Initialize map on mount
-  useEffect(() => {
-    setOptions({ apiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "" });
-
-    Promise.all([importLibrary("maps"), importLibrary("marker")])
-      .then(([{ Map, MapTypeControlStyle }, _marker]) => {
-        // After importLibrary, window.google.maps is fully populated
-        mapsApi.current = window.google.maps;
-
-        const map = new Map(mapRef.current, {
-          center: { lat: 33.749, lng: -84.388 },
-          zoom: 11,
-          mapTypeId: "roadmap",
-          mapTypeControl: true,
-          mapTypeControlOptions: {
-            style: MapTypeControlStyle.HORIZONTAL_BAR,
-            mapTypeIds: ["roadmap", "satellite"],
-          },
-          fullscreenControl: false,
-          streetViewControl: false,
-        });
-
-        mapInstance.current = map;
-        setMapLoaded(true);
-      })
-      .catch((err) => {
-        setError("Failed to load Google Maps: " + err.message);
+  // Initialize map once the Maps JS script has loaded
+  function initMap() {
+    if (!mapRef.current || mapInstance.current) return;
+    try {
+      const gmaps = window.google.maps;
+      mapsApi.current = gmaps;
+      const map = new gmaps.Map(mapRef.current, {
+        center: { lat: 33.749, lng: -84.388 },
+        zoom: 11,
+        mapTypeId: "roadmap",
+        mapTypeControl: true,
+        mapTypeControlOptions: {
+          style: gmaps.MapTypeControlStyle.HORIZONTAL_BAR,
+          mapTypeIds: ["roadmap", "satellite"],
+        },
+        fullscreenControl: false,
+        streetViewControl: false,
       });
-  }, []);
+      mapInstance.current = map;
+      setMapLoaded(true);
+    } catch (err) {
+      setError("Failed to initialize map: " + err.message);
+    }
+  }
 
   // Load saved search profiles on mount
   useEffect(() => {
@@ -382,6 +377,12 @@ export default function SearchPage() {
   const alreadyInDb  = selectedPlace && selectedPlace.existingStatus != null;
 
   return (
+    <>
+    <Script
+      src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=maps,marker&callback=Function.prototype`}
+      strategy="afterInteractive"
+      onLoad={initMap}
+    />
     <div className="flex flex-col" style={{ height: "calc(100vh - 112px)" }}>
       {/* Search bar row */}
       <div className="flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200 shrink-0">
@@ -676,5 +677,6 @@ export default function SearchPage() {
         )}
       </div>
     </div>
+    </>
   );
 }
