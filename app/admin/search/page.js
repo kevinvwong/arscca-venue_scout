@@ -241,14 +241,19 @@ export default function SearchPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: displayName,
-          lat: selectedPlace.lat,
-          lng: selectedPlace.lng,
-          google_place_id: selectedPlace.osmId,
-          source: "osm",
-          status: "candidate",
-          estimated_acres: selectedPlace.estimatedAcres ?? null,
-          surface: selectedPlace.surfaceType ?? null,
+          name:                 displayName,
+          address:              selectedPlace.address     ?? null,
+          lat:                  selectedPlace.lat,
+          lng:                  selectedPlace.lng,
+          google_place_id:      selectedPlace.osmId,
+          source:               "osm",
+          status:               "candidate",
+          estimated_acres:      selectedPlace.estimatedAcres   ?? null,
+          surface:              selectedPlace.surfaceType      ?? null,
+          highway_access_score: selectedPlace.highwayScore     ?? null,
+          owner_name:           selectedPlace.ownerName        ?? null,
+          owner_phone:          selectedPlace.ownerPhone       ?? null,
+          owner_email:          selectedPlace.ownerEmail       ?? null,
         }),
       });
 
@@ -455,9 +460,15 @@ export default function SearchPage() {
                 <p className="text-lg font-semibold text-gray-900 leading-snug">
                   {getLotDisplayName(selectedPlace)}
                 </p>
-                <p className="text-xs text-gray-400 mt-0.5 tabular-nums">
-                  {selectedPlace.lat.toFixed(5)}, {selectedPlace.lng.toFixed(5)}
-                </p>
+                {selectedPlace.address ? (
+                  <p className="text-sm text-gray-500 mt-0.5 leading-snug">
+                    {selectedPlace.address}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-400 mt-0.5 tabular-nums">
+                    {selectedPlace.lat.toFixed(5)}, {selectedPlace.lng.toFixed(5)}
+                  </p>
+                )}
               </div>
               <button
                 className="text-gray-400 hover:text-gray-600 text-xl leading-none shrink-0 mt-0.5"
@@ -496,6 +507,14 @@ export default function SearchPage() {
               <ScoreBar label="Size" value={selectedPlace.estimatedAcres != null
                 ? Math.min(100, Math.round((selectedPlace.estimatedAcres / 10) * 100))
                 : null} />
+              <div>
+                <ScoreBar label="Highway Access" value={selectedPlace.highwayScore} />
+                {selectedPlace.minutesToHighway != null && (
+                  <p className="text-[10px] text-gray-400 mt-0.5 tabular-nums">
+                    {selectedPlace.minutesToHighway} min to highway
+                  </p>
+                )}
+              </div>
 
               {/* Surface + acres */}
               <div className="flex gap-4 pt-1">
@@ -538,6 +557,38 @@ export default function SearchPage() {
             {selectedPlace.assessmentNotes && (
               <div className="px-4 pt-3">
                 <p className="text-xs text-gray-500 leading-relaxed">{selectedPlace.assessmentNotes}</p>
+              </div>
+            )}
+
+            {/* Owner / contact info */}
+            {(selectedPlace.ownerName || selectedPlace.ownerPhone || selectedPlace.ownerEmail || selectedPlace.ownerWebsite) && (
+              <div className="px-4 pt-3">
+                <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-2">Owner / Operator</p>
+                <div className="space-y-1">
+                  {selectedPlace.ownerName && (
+                    <p className="text-sm font-medium text-gray-800">{selectedPlace.ownerName}</p>
+                  )}
+                  {selectedPlace.ownerPhone && (
+                    <a href={`tel:${selectedPlace.ownerPhone}`} className="block text-sm text-teal-600 hover:text-teal-700">
+                      {selectedPlace.ownerPhone}
+                    </a>
+                  )}
+                  {selectedPlace.ownerEmail && (
+                    <a href={`mailto:${selectedPlace.ownerEmail}`} className="block text-sm text-teal-600 hover:text-teal-700 truncate">
+                      {selectedPlace.ownerEmail}
+                    </a>
+                  )}
+                  {selectedPlace.ownerWebsite && (
+                    <a
+                      href={selectedPlace.ownerWebsite}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block text-sm text-teal-600 hover:text-teal-700 truncate"
+                    >
+                      {selectedPlace.ownerWebsite.replace(/^https?:\/\//, "")}
+                    </a>
+                  )}
+                </div>
               </div>
             )}
 

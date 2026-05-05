@@ -6,6 +6,7 @@ import { requireAdmin } from "@/lib/require-admin";
 import { initDb, sql } from "@/lib/db";
 import Anthropic from "@anthropic-ai/sdk";
 import { queryOsmLots } from "@/lib/osm-search";
+import { getHighwayScore } from "@/lib/highway-score";
 
 const MAX_TO_SCORE = 20;
 
@@ -16,8 +17,18 @@ async function fetchSatelliteBase64(lat, lng, key) {
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    return Buffer.from(buf).toString("base64");
+    return Buffer.from(await res.arrayBuffer()).toString("base64");
+  } catch {
+    return null;
+  }
+}
+
+async function reverseGeocode(lat, lng, key) {
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${key}`;
+  try {
+    const res  = await fetch(url);
+    const data = await res.json();
+    return data.results?.[0]?.formatted_address ?? null;
   } catch {
     return null;
   }
@@ -28,22 +39,13 @@ async function scoreWithClaude(anthropic, { lat, lng, name, osmAcres, imageBase6
   const prompt =
     `Evaluate this satellite image for use as an outdoor driving event venue (autocross or teen driver safety training). Location: "${label}". OSM estimated ${osmAcres} acres.\n\n` +
     `Respond with ONLY a JSON object (no markdown):\n` +
-    `{\n` +
-    `  "estimated_acres": <number — usable paved area>,\n` +
-    `  "surface_type": <"asphalt"|"concrete"|"gravel"|"grass"|"mixed"|"unknown">,\n` +
-    `  "obstacles": <string[] — e.g. ["light poles","medians","curbs"]>,\n` +
-    `  "ai_score": <integer 0–100>,\n` +
-    `  "confidence": <"high"|"medium"|"low">,\n` +
-    `  "notes": <1-2 sentences>\n` +
-    `}\n\n` +
-    `Score: 80–100 large open asphalt; 60–79 good minor obstacles; 40–59 moderate; 20–39 small/obstructed; 0–19 unsuitable.`;
+    `{"estimated_acres":<number>,"surface_type":"asphalt|concrete|gravel|grass|mixed|unknown",` +
+    `"obstacles":<string[]>,"ai_score":<0-100>,"confidence":"high|medium|low","notes":<1-2 sentences>}\n\n` +
+    `Score: 80-100 large open asphalt; 60-79 good minor obstacles; 40-59 moderate; 20-39 small/obstructed; 0-19 unsuitable.`;
 
   const content = [];
   if (imageBase64) {
-    content.push({
-      type: "image",
-      source: { type: "base64", media_type: "image/png", data: imageBase64 },
-    });
+    content.push({ type: "image", source: { type: "base64", media_type: "image/png", data: imageBase64 } });
   }
   content.push({ type: "text", text: prompt });
 
@@ -96,50 +98,66 @@ export async function GET(req) {
   try {
     osmCandidates = await queryOsmLots(lat, lng, radiusMeters);
   } catch (err) {
-    return NextResponse.json(
-      { error: `Area scan failed: ${err.message}` },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: `Area scan failed: ${err.message}` }, { status: 502 });
   }
 
   if (osmCandidates.length === 0) {
     return NextResponse.json({ places: [] });
   }
 
-  // 2. Score top candidates with satellite imagery + Claude (parallel)
   const toScore = osmCandidates.slice(0, MAX_TO_SCORE);
 
   const anthropic = process.env.ANTHROPIC_API_KEY
     ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
     : null;
 
+  // 2. Per-candidate: satellite+Claude, highway score, and address — all parallel
   const scored = await Promise.all(
     toScore.map(async (candidate) => {
-      let aiResult = null;
-
-      if (anthropic) {
-        const imageBase64 = await fetchSatelliteBase64(candidate.lat, candidate.lng, mapsKey);
-        aiResult = await scoreWithClaude(anthropic, { ...candidate, imageBase64 });
-      }
+      const [aiResult, highwayData, resolvedAddress] = await Promise.all([
+        (async () => {
+          if (!anthropic) return null;
+          const imageBase64 = await fetchSatelliteBase64(candidate.lat, candidate.lng, mapsKey);
+          return scoreWithClaude(anthropic, { ...candidate, imageBase64 });
+        })(),
+        getHighwayScore(candidate.lat, candidate.lng, mapsKey),
+        candidate.osmAddress
+          ? Promise.resolve(candidate.osmAddress)
+          : reverseGeocode(candidate.lat, candidate.lng, mapsKey),
+      ]);
 
       const estimatedAcres = aiResult?.estimated_acres ?? candidate.osmAcres;
-      const aiScore = typeof aiResult?.ai_score === "number" ? aiResult.ai_score : null;
-      const lotScore = lotScoreFromAcres(estimatedAcres);
+      const aiScore        = typeof aiResult?.ai_score === "number" ? aiResult.ai_score : null;
+      const lotScore       = lotScoreFromAcres(estimatedAcres);
+      const highwayScore   = highwayData.score;
+
       const compositeScore =
         aiScore !== null
-          ? Math.round(aiScore * 0.6 + lotScore * 0.25 + 50 * 0.15)
-          : Math.round(lotScore * 0.85 + 50 * 0.15);
+          ? Math.round(aiScore * 0.6 + lotScore * 0.25 + highwayScore * 0.15)
+          : Math.round(lotScore * 0.85 + highwayScore * 0.15);
 
       return {
-        ...candidate,
+        osmId:            candidate.osmId,
+        name:             candidate.name,
+        address:          resolvedAddress,
+        lat:              candidate.lat,
+        lng:              candidate.lng,
+        osmAcres:         candidate.osmAcres,
+        ownerName:        candidate.ownerName,
+        ownerPhone:       candidate.ownerPhone,
+        ownerEmail:       candidate.ownerEmail,
+        ownerWebsite:     candidate.ownerWebsite,
+        tags:             candidate.tags,
         estimatedAcres,
-        surfaceType: aiResult?.surface_type ?? null,
-        obstacles: aiResult?.obstacles ?? [],
+        surfaceType:      aiResult?.surface_type ?? null,
+        obstacles:        aiResult?.obstacles     ?? [],
         aiScore,
+        highwayScore,
+        minutesToHighway: highwayData.minutesToHighway,
         compositeScore,
-        confidence: aiResult?.confidence ?? null,
-        assessmentNotes: aiResult?.notes ?? null,
-        existingStatus: null,
+        confidence:       aiResult?.confidence    ?? null,
+        assessmentNotes:  aiResult?.notes         ?? null,
+        existingStatus:   null,
       };
     })
   );
@@ -149,7 +167,7 @@ export async function GET(req) {
   // 3. Mark which candidates are already in our venues table
   await initDb();
   const osmIds = scored.map((s) => s.osmId);
-  let existingMap = {};
+  const existingMap = {};
   if (osmIds.length > 0) {
     const existing = await sql`
       SELECT google_place_id, status FROM venues
@@ -160,10 +178,10 @@ export async function GET(req) {
     }
   }
 
-  const results = scored.map((s) => ({
-    ...s,
-    existingStatus: existingMap[s.osmId] ?? null,
-  }));
-
-  return NextResponse.json({ places: results });
+  return NextResponse.json({
+    places: scored.map((s) => ({
+      ...s,
+      existingStatus: existingMap[s.osmId] ?? null,
+    })),
+  });
 }

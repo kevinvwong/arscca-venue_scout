@@ -86,7 +86,8 @@ export async function POST(req) {
   const {
     name, address, city, state, zip,
     lat, lng, estimated_acres, lot_type, surface,
-    notes, owner_name, owner_email, owner_phone,
+    highway_access_score,
+    notes, owner_name, owner_email, owner_phone, owner_website,
     region, status: bodyStatus,
     source: bodySource, google_place_id,
   } = body;
@@ -107,7 +108,7 @@ export async function POST(req) {
   const result = await sql`
     INSERT INTO venues (
       name, address, city, state, zip, lat, lng,
-      estimated_acres, lot_type, surface, notes,
+      estimated_acres, lot_type, surface, highway_access_score, notes,
       owner_name, owner_email, owner_phone, region, status,
       source, google_place_id, added_by
     ) VALUES (
@@ -115,7 +116,9 @@ export async function POST(req) {
       ${address || null}, ${city || null}, ${state || null}, ${zip || null},
       ${lat ? Number(lat) : null}, ${lng ? Number(lng) : null},
       ${estimated_acres ? Number(estimated_acres) : null},
-      ${lot_type || null}, ${surface || null}, ${notes || null},
+      ${lot_type || null}, ${surface || null},
+      ${highway_access_score ? Number(highway_access_score) : null},
+      ${notes || null},
       ${owner_name || null}, ${owner_email || null}, ${owner_phone || null},
       ${region || null}, ${status}, ${source}, ${google_place_id || null}, ${addedBy}
     )
