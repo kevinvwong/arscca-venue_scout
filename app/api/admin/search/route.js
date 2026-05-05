@@ -7,6 +7,7 @@ import { initDb, sql } from "@/lib/db";
 import Anthropic from "@anthropic-ai/sdk";
 import { queryOsmLots } from "@/lib/osm-search";
 import { getHighwayScore } from "@/lib/highway-score";
+import { buildScoutPrompt, parseScoutResponse } from "@/lib/scout-prompt";
 
 const MAX_TO_SCORE = 20;
 
@@ -35,14 +36,7 @@ async function reverseGeocode(lat, lng, key) {
 }
 
 async function scoreWithClaude(anthropic, { lat, lng, name, osmAcres, imageBase64 }) {
-  const label = name || `lot at ${lat.toFixed(4)},${lng.toFixed(4)}`;
-  const prompt =
-    `Evaluate this satellite image for use as an outdoor driving event venue (autocross or teen driver safety training). Location: "${label}". OSM estimated ${osmAcres} acres.\n\n` +
-    `Respond with ONLY a JSON object (no markdown):\n` +
-    `{"estimated_acres":<number>,"surface_type":"asphalt|concrete|gravel|grass|mixed|unknown",` +
-    `"obstacles":<string[]>,"ai_score":<0-100>,"confidence":"high|medium|low","notes":<1-2 sentences>}\n\n` +
-    `Score: 80-100 large open asphalt; 60-79 good minor obstacles; 40-59 moderate; 20-39 small/obstructed; 0-19 unsuitable.`;
-
+  const prompt  = buildScoutPrompt(name, lat, lng, osmAcres);
   const content = [];
   if (imageBase64) {
     content.push({ type: "image", source: { type: "base64", media_type: "image/png", data: imageBase64 } });
@@ -52,11 +46,11 @@ async function scoreWithClaude(anthropic, { lat, lng, name, osmAcres, imageBase6
   try {
     const msg = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 512,
+      max_tokens: 768,
       messages: [{ role: "user", content }],
     });
     const raw = msg.content.find((b) => b.type === "text")?.text ?? "";
-    return JSON.parse(raw);
+    return parseScoutResponse(raw);
   } catch {
     return null;
   }
@@ -113,10 +107,10 @@ export async function GET(req) {
     ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
     : null;
 
-  // 2. Per-candidate: satellite+Claude, highway score, and address — all parallel
+  // 2. Per-candidate: scout analysis, highway score, address — all parallel
   const scored = await Promise.all(
     toScore.map(async (candidate) => {
-      const [aiResult, highwayData, resolvedAddress] = await Promise.all([
+      const [scout, highwayData, resolvedAddress] = await Promise.all([
         (async () => {
           if (!anthropic) return null;
           const imageBase64 = await fetchSatelliteBase64(candidate.lat, candidate.lng, mapsKey);
@@ -128,43 +122,64 @@ export async function GET(req) {
           : reverseGeocode(candidate.lat, candidate.lng, mapsKey),
       ]);
 
-      const estimatedAcres = aiResult?.estimated_acres ?? candidate.osmAcres;
-      const aiScore        = typeof aiResult?.ai_score === "number" ? aiResult.ai_score : null;
-      const lotScore       = lotScoreFromAcres(estimatedAcres);
+      // Use Claude's usable_acres estimate; fall back to OSM polygon area
+      const usableAcres    = scout?.usableAcres ?? null;
+      const estimatedAcres = usableAcres ?? scout?.totalAcres ?? candidate.osmAcres;
+      const aiScore        = scout?.aiScore ?? null;
       const highwayScore   = highwayData.score;
+      const lotScore       = lotScoreFromAcres(estimatedAcres);
 
-      const compositeScore =
+      const baseComposite =
         aiScore !== null
           ? Math.round(aiScore * 0.35 + lotScore * 0.50 + highwayScore * 0.15)
           : Math.round(lotScore * 0.85 + highwayScore * 0.15);
 
+      // Hard disqualifiers cap the composite score
+      const disqualifiers  = scout?.disqualifiers ?? [];
+      const compositeScore = disqualifiers.length > 0
+        ? Math.min(baseComposite, 35)
+        : baseComposite;
+
       return {
-        osmId:            candidate.osmId,
-        name:             candidate.name,
-        address:          resolvedAddress,
-        lat:              candidate.lat,
-        lng:              candidate.lng,
-        osmAcres:         candidate.osmAcres,
-        ownerName:        candidate.ownerName,
-        ownerPhone:       candidate.ownerPhone,
-        ownerEmail:       candidate.ownerEmail,
-        ownerWebsite:     candidate.ownerWebsite,
-        tags:             candidate.tags,
+        osmId:                candidate.osmId,
+        name:                 candidate.name,
+        address:              resolvedAddress,
+        lat:                  candidate.lat,
+        lng:                  candidate.lng,
+        osmAcres:             candidate.osmAcres,
+        ownerName:            candidate.ownerName,
+        ownerPhone:           candidate.ownerPhone,
+        ownerEmail:           candidate.ownerEmail,
+        ownerWebsite:         candidate.ownerWebsite,
+        tags:                 candidate.tags,
+        // Acreage
         estimatedAcres,
-        surfaceType:      aiResult?.surface_type ?? null,
-        obstacles:        aiResult?.obstacles     ?? [],
+        usableAcres,
+        totalAcres:           scout?.totalAcres ?? null,
+        // Surface
+        surfaceType:          scout?.surfaceType          ?? null,
+        surfaceCondition:     scout?.surfaceCondition     ?? null,
+        // Layout
+        shape:                scout?.shape                ?? null,
+        lotType:              scout?.lotType              ?? null,
+        // Obstructions / safety
+        internalObstructions: scout?.internalObstructions ?? [],
+        runoffAdequate:       scout?.runoffAdequate       ?? null,
+        residentialProximity: scout?.residentialProximity ?? null,
+        // Scoring
         aiScore,
         highwayScore,
-        minutesToHighway: highwayData.minutesToHighway,
+        minutesToHighway:     highwayData.minutesToHighway,
         compositeScore,
-        confidence:       aiResult?.confidence    ?? null,
-        assessmentNotes:  aiResult?.notes         ?? null,
-        existingStatus:   null,
+        disqualifiers,
+        confidence:           scout?.confidence           ?? null,
+        assessmentNotes:      scout?.notes                ?? null,
+        existingStatus:       null,
       };
     })
   );
 
-  // Primary sort: largest lot first. Ties broken by composite score.
+  // Primary sort: largest usable lot first; ties broken by composite score
   scored.sort((a, b) =>
     (b.osmAcres ?? 0) - (a.osmAcres ?? 0) ||
     (b.compositeScore ?? 0) - (a.compositeScore ?? 0)
@@ -172,7 +187,7 @@ export async function GET(req) {
 
   // 3. Mark which candidates are already in our venues table
   await initDb();
-  const osmIds = scored.map((s) => s.osmId);
+  const osmIds     = scored.map((s) => s.osmId);
   const existingMap = {};
   if (osmIds.length > 0) {
     const existing = await sql`
@@ -185,9 +200,6 @@ export async function GET(req) {
   }
 
   return NextResponse.json({
-    places: scored.map((s) => ({
-      ...s,
-      existingStatus: existingMap[s.osmId] ?? null,
-    })),
+    places: scored.map((s) => ({ ...s, existingStatus: existingMap[s.osmId] ?? null })),
   });
 }

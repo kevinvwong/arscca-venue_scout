@@ -490,21 +490,39 @@ export default function SearchPage() {
               />
             </div>
 
+            {/* Disqualifiers — shown at top if present */}
+            {selectedPlace.disqualifiers?.length > 0 && (
+              <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200">
+                <p className="text-[10px] uppercase tracking-widest font-semibold text-red-500 mb-1">Disqualifiers</p>
+                <div className="space-y-0.5">
+                  {selectedPlace.disqualifiers.map((d, i) => (
+                    <p key={i} className="text-xs text-red-700">{d}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Score card */}
             <div className="mx-4 mt-3 px-3 py-3 rounded-lg bg-gray-50 border border-gray-200 space-y-2.5">
-              {/* Acreage — primary metric */}
-              <div className="flex items-baseline justify-between">
-                <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Est. Acres</span>
-                <span className="text-2xl font-bold tabular-nums text-gray-900 leading-none">
-                  {selectedPlace.estimatedAcres != null
-                    ? selectedPlace.estimatedAcres.toFixed(1)
-                    : selectedPlace.osmAcres?.toFixed(1) ?? "—"}
-                </span>
+              {/* Acreage row — primary metric */}
+              <div className="flex items-end justify-between">
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Usable Acres</p>
+                  <span className="text-2xl font-bold tabular-nums text-gray-900 leading-none">
+                    {(selectedPlace.usableAcres ?? selectedPlace.estimatedAcres ?? selectedPlace.osmAcres)?.toFixed(1) ?? "—"}
+                  </span>
+                </div>
+                {selectedPlace.totalAcres != null && selectedPlace.totalAcres !== selectedPlace.usableAcres && (
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Total</p>
+                    <p className="text-sm tabular-nums text-gray-500">{selectedPlace.totalAcres.toFixed(1)}</p>
+                  </div>
+                )}
               </div>
 
-              {/* Composite score + surface */}
-              <div className="flex items-center justify-between pt-0.5">
-                <div className="flex items-center gap-2">
+              {/* Composite score + surface + shape */}
+              <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                <div className="flex items-center gap-1.5">
                   <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Score</span>
                   <span className={`text-lg font-bold tabular-nums leading-none ${
                     (selectedPlace.compositeScore ?? 0) >= 70 ? "text-green-700" :
@@ -513,14 +531,32 @@ export default function SearchPage() {
                     {selectedPlace.compositeScore ?? "—"}
                   </span>
                 </div>
-                <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
-                  {selectedPlace.surfaceType ?? "surface unknown"}
-                </span>
+                {selectedPlace.surfaceType && (
+                  <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
+                    {selectedPlace.surfaceType}
+                  </span>
+                )}
+                {selectedPlace.surfaceCondition != null && (
+                  <span className="inline-block bg-gray-100 text-gray-600 text-xs rounded-full px-2 py-0.5">
+                    Cond. {selectedPlace.surfaceCondition}/5
+                  </span>
+                )}
+                {selectedPlace.shape && (
+                  <span className="inline-block bg-blue-50 text-blue-700 border border-blue-200 text-xs rounded-full px-2 py-0.5 capitalize">
+                    {selectedPlace.shape}
+                  </span>
+                )}
+                {selectedPlace.lotType && (
+                  <span className="inline-block bg-purple-50 text-purple-700 border border-purple-200 text-xs rounded-full px-2 py-0.5">
+                    {selectedPlace.lotType.replace(/_/g, " ")}
+                  </span>
+                )}
               </div>
 
-              <ScoreBar label="Size" value={selectedPlace.estimatedAcres != null
-                ? Math.min(100, Math.round((selectedPlace.estimatedAcres / 60) * 100))
-                : null} />
+              <ScoreBar label="Size (usable acres)" value={(() => {
+                const a = selectedPlace.usableAcres ?? selectedPlace.estimatedAcres ?? selectedPlace.osmAcres;
+                return a != null ? Math.min(100, Math.round((a / 60) * 100)) : null;
+              })()} />
               <ScoreBar label="AI Suitability" value={selectedPlace.aiScore} />
               <div>
                 <ScoreBar label="Highway Access" value={selectedPlace.highwayScore} />
@@ -530,6 +566,24 @@ export default function SearchPage() {
                   </p>
                 )}
               </div>
+
+              {/* Run-off indicator */}
+              {selectedPlace.runoffAdequate != null && (
+                <div className="flex items-center gap-1.5 pt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${selectedPlace.runoffAdequate ? "bg-green-500" : "bg-red-400"}`} />
+                  <span className="text-xs text-gray-600">
+                    {selectedPlace.runoffAdequate ? "Run-off buffer adequate" : "Run-off buffer tight — verify on site"}
+                  </span>
+                </div>
+              )}
+              {selectedPlace.residentialProximity && selectedPlace.residentialProximity !== "none" && (
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${selectedPlace.residentialProximity === "adjacent" ? "bg-orange-400" : "bg-yellow-400"}`} />
+                  <span className="text-xs text-gray-600 capitalize">
+                    Residential: {selectedPlace.residentialProximity}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Obstacles */}
