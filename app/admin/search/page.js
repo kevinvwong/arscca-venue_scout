@@ -265,6 +265,12 @@ export default function SearchPage() {
 
       // Update the marker icon immediately
       refreshMarkerIcon(selectedPlace.placeId, newSet);
+
+      // Fire-and-forget AI scoring — don't await, don't block the UI
+      const venueId = data.venue?.id;
+      if (venueId) {
+        fetch(`/api/admin/venues/${venueId}/score`, { method: "POST" }).catch(() => {});
+      }
     } catch (err) {
       setError(err.message);
     } finally {

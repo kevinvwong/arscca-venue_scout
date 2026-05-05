@@ -75,10 +75,7 @@ function SignInForm() {
         </button>
       </form>
       <p className="text-center text-xs text-ink-subtle mt-6">
-        Need an account?{" "}
-        <a href="mailto:admin@example.com" className="text-brand-600 hover:underline">
-          Contact your administrator.
-        </a>
+        Need access? Contact your VenueScout administrator.
       </p>
     </div>
   );

@@ -1,0 +1,12 @@
+{
+  "functions": {
+    "app/api/admin/venues/[id]/score/route.js": { "maxDuration": 60 },
+    "app/api/admin/search/score-batch/route.js": { "maxDuration": 120 }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/follow-up-alerts",
+      "schedule": "0 9 * * *"
+    }
+  ]
+}
