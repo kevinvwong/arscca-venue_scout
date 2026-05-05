@@ -104,18 +104,18 @@ export default function SearchPage() {
   const mapsApi     = useRef(null);   // google.maps namespace
 
   // Initialize map once the Maps JS script has loaded
-  async function initMap() {
+  function initMap() {
     if (!mapRef.current || mapInstance.current) return;
     try {
-      const { Map, MapTypeControlStyle } = await window.google.maps.importLibrary("maps");
-      mapsApi.current = window.google.maps;
-      const map = new Map(mapRef.current, {
+      const gmaps = window.google.maps;
+      mapsApi.current = gmaps;
+      const map = new gmaps.Map(mapRef.current, {
         center: { lat: 33.749, lng: -84.388 },
         zoom: 11,
         mapTypeId: "roadmap",
         mapTypeControl: true,
         mapTypeControlOptions: {
-          style: MapTypeControlStyle.HORIZONTAL_BAR,
+          style: gmaps.MapTypeControlStyle.HORIZONTAL_BAR,
           mapTypeIds: ["roadmap", "satellite"],
         },
         fullscreenControl: false,
@@ -379,7 +379,7 @@ export default function SearchPage() {
   return (
     <>
     <Script
-      src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=maps,marker&loading=async&callback=Function.prototype`}
+      src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=maps,marker&callback=Function.prototype`}
       strategy="afterInteractive"
       onLoad={initMap}
     />
