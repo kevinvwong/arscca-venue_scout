@@ -71,6 +71,13 @@ export default function VenuesPage() {
   const [outreachSent, setOutreachSent]         = useState(false);
   const [outreachEventType, setOutreachEventType] = useState("teen driver safety training event");
   const [outreachOrgName, setOutreachOrgName]     = useState("Atlanta Region SCCA — Tire Rack Street Survival");
+  const [scoreHistory, setScoreHistory]           = useState([]);
+  const [loadingHistory, setLoadingHistory]       = useState(false);
+  const [showHistory, setShowHistory]             = useState(false);
+  const [showOverride, setShowOverride]           = useState(false);
+  const [overrideScore, setOverrideScore]         = useState("");
+  const [overrideNote, setOverrideNote]           = useState("");
+  const [savingOverride, setSavingOverride]       = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -118,6 +125,13 @@ export default function VenuesPage() {
     setOutreachSent(false);
     setOutreachEventType("teen driver safety training event");
     setOutreachOrgName("Atlanta Region SCCA — Tire Rack Street Survival");
+    setScoreHistory([]);
+    setLoadingHistory(false);
+    setShowHistory(false);
+    setShowOverride(false);
+    setOverrideScore("");
+    setOverrideNote("");
+    setSavingOverride(false);
   }
 
   function closeEdit() {
@@ -173,6 +187,38 @@ export default function VenuesPage() {
       setScoreError(e.message);
     } finally {
       setScoring(false);
+    }
+  }
+
+  async function loadScoreHistory() {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/admin/venues/${selected.id}/assessments`);
+      const data = await res.json();
+      if (res.ok) setScoreHistory(data.assessments || []);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
+  async function saveOverride() {
+    const score = parseInt(overrideScore, 10);
+    if (isNaN(score) || score < 0 || score > 100) return;
+    setSavingOverride(true);
+    try {
+      const res = await fetch(`/api/admin/venues/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ custom_score: score, custom_score_note: overrideNote }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVenues((prev) => prev.map((v) => v.id === data.venue.id ? data.venue : v));
+        setSelected(data.venue);
+        setShowOverride(false);
+      }
+    } finally {
+      setSavingOverride(false);
     }
   }
 
@@ -523,6 +569,92 @@ export default function VenuesPage() {
                     )}
                   </div>
                 )}
+
+                {/* Score history */}
+                {(selected.composite_score != null || scoreHistory.length > 0) && (
+                  <div className="border-t border-gray-100 pt-3">
+                    <button
+                      onClick={() => { setShowHistory((v) => !v); if (!showHistory && scoreHistory.length === 0) loadScoreHistory(); }}
+                      className="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1"
+                    >
+                      {showHistory ? "▲" : "▼"} Score history
+                      {loadingHistory && <span className="w-3 h-3 border border-gray-300 border-t-gray-600 rounded-full animate-spin ml-1" />}
+                    </button>
+                    {showHistory && scoreHistory.length > 0 && (
+                      <div className="mt-2 space-y-1.5">
+                        {scoreHistory.map((a) => (
+                          <div key={a.id} className="text-xs text-gray-600 flex items-center justify-between">
+                            <span className="text-gray-400">{new Date(a.assessed_at).toLocaleDateString()}</span>
+                            <span>{a.model?.replace("claude-", "").replace("-20251001","")}</span>
+                            <span className={`font-semibold tabular-nums ${a.suitability_score >= 70 ? "text-green-700" : a.suitability_score >= 40 ? "text-yellow-700" : "text-red-700"}`}>
+                              {a.suitability_score ?? "—"}
+                            </span>
+                            <span className="text-gray-400">{a.confidence}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {showHistory && scoreHistory.length === 0 && !loadingHistory && (
+                      <p className="text-xs text-gray-400 mt-1">No assessments yet.</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Re-analyze button */}
+                {selected.composite_score != null && !scoring && (
+                  <button
+                    onClick={runAiScore}
+                    className="text-xs text-gray-400 hover:text-teal-600 underline underline-offset-2"
+                  >
+                    Re-analyze with fresh satellite image
+                  </button>
+                )}
+
+                {/* Manual score override */}
+                <div className="border-t border-gray-100 pt-3">
+                  {selected.custom_score != null ? (
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">Manual Override</span>
+                        <p className="text-lg font-bold text-orange-600 tabular-nums">{selected.custom_score}</p>
+                        {selected.custom_score_note && <p className="text-xs text-gray-500 italic">{selected.custom_score_note}</p>}
+                      </div>
+                      <button onClick={() => { setOverrideScore(String(selected.custom_score)); setOverrideNote(selected.custom_score_note || ""); setShowOverride(true); }} className="text-xs text-gray-400 hover:text-gray-600 underline">Edit</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setShowOverride((v) => !v)} className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2">
+                      {showOverride ? "Cancel override" : "Set manual score override"}
+                    </button>
+                  )}
+                  {showOverride && (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number" min="0" max="100"
+                          className="input w-20 text-sm"
+                          value={overrideScore}
+                          onChange={(e) => setOverrideScore(e.target.value)}
+                          placeholder="0–100"
+                        />
+                        <span className="text-xs text-gray-400">overrides AI score</span>
+                      </div>
+                      <input
+                        type="text"
+                        className="input w-full text-sm"
+                        value={overrideNote}
+                        onChange={(e) => setOverrideNote(e.target.value)}
+                        placeholder="Reason for override (optional)"
+                      />
+                      <button
+                        onClick={saveOverride}
+                        disabled={savingOverride || !overrideScore}
+                        className="btn btn-outline text-xs w-full"
+                      >
+                        {savingOverride ? "Saving…" : "Save override"}
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {saveError && <div className="notice-error" role="alert">{saveError}</div>}

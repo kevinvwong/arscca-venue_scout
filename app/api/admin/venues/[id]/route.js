@@ -24,6 +24,7 @@ export async function PATCH(req, { params }) {
     "lot_type","surface","status","region","notes",
     "owner_name","owner_email","owner_phone","owner_source",
     "obstacle_score","highway_access_score","composite_score",
+    "custom_score","custom_score_note",
   ];
 
   const updates = Object.fromEntries(
