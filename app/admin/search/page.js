@@ -492,49 +492,42 @@ export default function SearchPage() {
 
             {/* Score card */}
             <div className="mx-4 mt-3 px-3 py-3 rounded-lg bg-gray-50 border border-gray-200 space-y-2.5">
-              {/* Composite score */}
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Composite Score</span>
-                <span className={`text-xl font-bold tabular-nums leading-none ${
-                  (selectedPlace.compositeScore ?? 0) >= 70 ? "text-green-700" :
-                  (selectedPlace.compositeScore ?? 0) >= 45 ? "text-yellow-700" : "text-red-600"
-                }`}>
-                  {selectedPlace.compositeScore ?? "—"}
+              {/* Acreage — primary metric */}
+              <div className="flex items-baseline justify-between">
+                <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Est. Acres</span>
+                <span className="text-2xl font-bold tabular-nums text-gray-900 leading-none">
+                  {selectedPlace.estimatedAcres != null
+                    ? selectedPlace.estimatedAcres.toFixed(1)
+                    : selectedPlace.osmAcres?.toFixed(1) ?? "—"}
                 </span>
               </div>
 
-              <ScoreBar label="AI Suitability" value={selectedPlace.aiScore} />
+              {/* Composite score + surface */}
+              <div className="flex items-center justify-between pt-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-widest font-semibold text-gray-400">Score</span>
+                  <span className={`text-lg font-bold tabular-nums leading-none ${
+                    (selectedPlace.compositeScore ?? 0) >= 70 ? "text-green-700" :
+                    (selectedPlace.compositeScore ?? 0) >= 45 ? "text-yellow-700" : "text-red-600"
+                  }`}>
+                    {selectedPlace.compositeScore ?? "—"}
+                  </span>
+                </div>
+                <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
+                  {selectedPlace.surfaceType ?? "surface unknown"}
+                </span>
+              </div>
+
               <ScoreBar label="Size" value={selectedPlace.estimatedAcres != null
-                ? Math.min(100, Math.round((selectedPlace.estimatedAcres / 10) * 100))
+                ? Math.min(100, Math.round((selectedPlace.estimatedAcres / 60) * 100))
                 : null} />
+              <ScoreBar label="AI Suitability" value={selectedPlace.aiScore} />
               <div>
                 <ScoreBar label="Highway Access" value={selectedPlace.highwayScore} />
                 {selectedPlace.minutesToHighway != null && (
                   <p className="text-[10px] text-gray-400 mt-0.5 tabular-nums">
                     {selectedPlace.minutesToHighway} min to highway
                   </p>
-                )}
-              </div>
-
-              {/* Surface + acres */}
-              <div className="flex gap-4 pt-1">
-                <div>
-                  <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Surface</p>
-                  <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
-                    {selectedPlace.surfaceType ?? "unknown"}
-                  </span>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Est. Acres</p>
-                  <p className="text-sm font-semibold tabular-nums text-gray-800 mt-0.5">
-                    {selectedPlace.estimatedAcres != null ? selectedPlace.estimatedAcres.toFixed(1) : "—"}
-                  </p>
-                </div>
-                {selectedPlace.confidence && (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Confidence</p>
-                    <p className="text-xs text-gray-600 mt-0.5 capitalize">{selectedPlace.confidence}</p>
-                  </div>
                 )}
               </div>
             </div>

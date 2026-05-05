@@ -63,11 +63,13 @@ async function scoreWithClaude(anthropic, { lat, lng, name, osmAcres, imageBase6
 }
 
 function lotScoreFromAcres(acres) {
-  if (!acres) return 50;
-  if (acres < 1) return 10;
-  if (acres < 2) return 30;
-  if (acres < 5) return 60;
-  if (acres <= 10) return 80;
+  if (!acres || acres <= 0) return 0;
+  if (acres < 2)  return 15;
+  if (acres < 4)  return 35;
+  if (acres < 8)  return 55;
+  if (acres < 15) return 70;
+  if (acres < 30) return 82;
+  if (acres < 60) return 92;
   return 100;
 }
 
@@ -133,7 +135,7 @@ export async function GET(req) {
 
       const compositeScore =
         aiScore !== null
-          ? Math.round(aiScore * 0.6 + lotScore * 0.25 + highwayScore * 0.15)
+          ? Math.round(aiScore * 0.35 + lotScore * 0.50 + highwayScore * 0.15)
           : Math.round(lotScore * 0.85 + highwayScore * 0.15);
 
       return {
@@ -162,7 +164,11 @@ export async function GET(req) {
     })
   );
 
-  scored.sort((a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0));
+  // Primary sort: largest lot first. Ties broken by composite score.
+  scored.sort((a, b) =>
+    (b.osmAcres ?? 0) - (a.osmAcres ?? 0) ||
+    (b.compositeScore ?? 0) - (a.compositeScore ?? 0)
+  );
 
   // 3. Mark which candidates are already in our venues table
   await initDb();
