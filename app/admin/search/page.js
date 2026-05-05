@@ -81,6 +81,19 @@ export default function SearchPage() {
   const [addingToDb, setAddingToDb]     = useState(false);
   const [addedMsg, setAddedMsg]         = useState(false);
 
+  // Batch scoring state
+  const [batchScoring, setBatchScoring]   = useState(false);
+  const [batchResults, setBatchResults]   = useState(new Map()); // placeId → score data
+  const [batchProgress, setBatchProgress] = useState(0);
+
+  // Saved search profiles
+  const [profiles, setProfiles]           = useState([]);
+  const [lastGeoLat, setLastGeoLat]       = useState(null);
+  const [lastGeoLng, setLastGeoLng]       = useState(null);
+  const [showSaveForm, setShowSaveForm]   = useState(false);
+  const [saveName, setSaveName]           = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+
   // Map refs — stored in refs, not state, to avoid re-render loops
   const mapRef      = useRef(null);   // DOM element
   const mapInstance = useRef(null);   // google.maps.Map
@@ -115,6 +128,14 @@ export default function SearchPage() {
     }).catch((err) => {
       setError("Failed to load Google Maps: " + err.message);
     });
+  }, []);
+
+  // Load saved search profiles on mount
+  useEffect(() => {
+    fetch("/api/admin/search/profiles")
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d.profiles)) setProfiles(d.profiles); })
+      .catch(() => {});
   }, []);
 
   // Update a single marker's icon (e.g. after adding to DB)
@@ -192,6 +213,9 @@ export default function SearchPage() {
       if (!geoRes.ok) throw new Error(geoData.error || "Geocode failed");
 
       const { lat, lng } = geoData;
+      setLastGeoLat(lat);
+      setLastGeoLng(lng);
+      setShowSaveForm(false);
 
       // Step 2: nearby places
       const placesRes = await fetch(
@@ -248,6 +272,103 @@ export default function SearchPage() {
     }
   }, [selectedPlace, addedPlaceIds, refreshMarkerIcon]);
 
+  const saveProfile = useCallback(async () => {
+    if (!lastGeoLat || !lastGeoLng || !saveName.trim()) return;
+    setSavingProfile(true);
+    try {
+      const res = await fetch("/api/admin/search/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: saveName.trim(),
+          center_lat: lastGeoLat,
+          center_lng: lastGeoLng,
+          radius_miles: Math.round(radius / 1609),
+          lot_types: [placeType],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setProfiles((prev) => [data.profile, ...prev]);
+        setShowSaveForm(false);
+        setSaveName("");
+      }
+    } finally {
+      setSavingProfile(false);
+    }
+  }, [lastGeoLat, lastGeoLng, saveName, radius, placeType]);
+
+  const deleteProfile = useCallback(async (id) => {
+    await fetch(`/api/admin/search/profiles/${id}`, { method: "DELETE" });
+    setProfiles((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const replayProfile = useCallback((profile) => {
+    setSearchInput(profile.name);
+    setRadius((profile.radius_miles || 30) * 1609);
+    fetch(`/api/admin/search/profiles/${profile.id}`, { method: "PATCH" }).catch(() => {});
+    // Trigger search with the profile's stored center directly
+    fetch(`/api/admin/search?lat=${profile.center_lat}&lng=${profile.center_lng}&radius=${(profile.radius_miles || 30) * 1609}&type=${placeType}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.places) {
+          setPlaces(d.places);
+          setLastGeoLat(Number(profile.center_lat));
+          setLastGeoLng(Number(profile.center_lng));
+        }
+      })
+      .catch(() => {});
+  }, [placeType]);
+
+  const runBatchScore = useCallback(async () => {
+    // Only score places not yet in batchResults and without an existingStatus
+    const unscored = places.filter(
+      (p) => !batchResults.has(p.placeId) && !p.existingStatus
+    ).slice(0, 10);
+
+    if (unscored.length === 0) return;
+
+    setBatchScoring(true);
+    setBatchProgress(0);
+
+    try {
+      const res = await fetch("/api/admin/search/score-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          places: unscored.map((p) => ({
+            placeId: p.placeId,
+            name: p.name,
+            address: p.address,
+            lat: p.lat,
+            lng: p.lng,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Batch scoring failed");
+
+      setBatchResults((prev) => {
+        const next = new Map(prev);
+        for (const result of data.results ?? []) {
+          next.set(result.placeId, result);
+        }
+        return next;
+      });
+
+      setBatchProgress(100);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBatchScoring(false);
+    }
+  }, [places, batchResults]);
+
+  const unscoredCount = places.filter(
+    (p) => !batchResults.has(p.placeId) && !p.existingStatus
+  ).length;
+
   const alreadyAdded = selectedPlace && addedPlaceIds.has(selectedPlace.placeId);
   const alreadyInDb  = selectedPlace && selectedPlace.existingStatus != null;
 
@@ -294,7 +415,71 @@ export default function SearchPage() {
           )}
           Search
         </button>
+
+        {places.length > 0 && (
+          <button
+            className="btn btn-outline shrink-0 flex items-center gap-2 text-teal-600 border-teal-300 hover:border-teal-500"
+            onClick={runBatchScore}
+            disabled={batchScoring || unscoredCount === 0}
+          >
+            {batchScoring ? (
+              <>
+                <span className="w-4 h-4 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
+                Scoring…
+              </>
+            ) : (
+              `Score All (${unscoredCount})`
+            )}
+          </button>
+        )}
       </div>
+
+      {/* Batch scoring progress bar */}
+      {batchScoring && (
+        <div className="h-1 bg-gray-100 shrink-0">
+          <div
+            className="h-1 bg-teal-500 transition-all duration-300"
+            style={{ width: `${batchProgress}%` }}
+          />
+        </div>
+      )}
+
+      {/* Saved searches strip */}
+      {(profiles.length > 0 || (places.length > 0 && lastGeoLat)) && (
+        <div className="flex items-center gap-2 px-6 py-2 bg-gray-50 border-b border-gray-100 shrink-0 flex-wrap">
+          <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle shrink-0">Saved</span>
+          {profiles.map((p) => (
+            <span key={p.id} className="inline-flex items-center gap-1 rounded-full bg-white border border-gray-200 px-3 py-0.5 text-xs font-medium text-gray-700 hover:border-teal-400 transition-colors">
+              <button onClick={() => replayProfile(p)} className="hover:text-teal-700">{p.name}</button>
+              <button onClick={() => deleteProfile(p.id)} className="text-gray-300 hover:text-red-400 ml-0.5 leading-none">×</button>
+            </span>
+          ))}
+          {places.length > 0 && lastGeoLat && !showSaveForm && (
+            <button
+              onClick={() => { setShowSaveForm(true); setSaveName(searchInput.trim()); }}
+              className="rounded-full border border-dashed border-gray-300 px-3 py-0.5 text-xs text-gray-400 hover:text-teal-600 hover:border-teal-400 transition-colors"
+            >
+              + Save this search
+            </button>
+          )}
+          {showSaveForm && (
+            <span className="inline-flex items-center gap-1.5">
+              <input
+                autoFocus
+                className="input text-xs py-0.5 px-2 w-40 h-7"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveProfile(); if (e.key === "Escape") setShowSaveForm(false); }}
+                placeholder="Search name"
+              />
+              <button onClick={saveProfile} disabled={savingProfile || !saveName.trim()} className="text-xs text-teal-600 font-semibold hover:text-teal-700">
+                {savingProfile ? "Saving…" : "Save"}
+              </button>
+              <button onClick={() => setShowSaveForm(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
@@ -354,6 +539,46 @@ export default function SearchPage() {
                 className="rounded-lg w-full object-cover"
               />
             </div>
+
+            {/* Batch score card */}
+            {batchResults.has(selectedPlace.placeId) && (() => {
+              const s = batchResults.get(selectedPlace.placeId);
+              if (s.status === "error") {
+                return (
+                  <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+                    Scoring failed: {s.error}
+                  </div>
+                );
+              }
+              const scoreColor =
+                s.composite_score >= 70
+                  ? "text-green-700"
+                  : s.composite_score >= 45
+                  ? "text-yellow-700"
+                  : "text-red-700";
+              return (
+                <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">AI Score</p>
+                    <p className={`text-lg font-bold tabular-nums leading-none ${scoreColor}`}>
+                      {s.composite_score ?? "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Surface</p>
+                    <span className="inline-block bg-gray-200 text-gray-700 text-xs rounded-full px-2 py-0.5 capitalize">
+                      {s.surface_type ?? "unknown"}
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest font-semibold text-gray-400 mb-0.5">Est. Acres</p>
+                    <p className="text-sm font-semibold tabular-nums text-gray-800 leading-none mt-0.5">
+                      {s.estimated_acres != null ? s.estimated_acres.toFixed(1) : "—"}
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Details */}
             <div className="px-4 py-4 space-y-3 flex-1">
