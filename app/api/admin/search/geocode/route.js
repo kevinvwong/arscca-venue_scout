@@ -31,7 +31,7 @@ export async function GET(req) {
   const data = await res.json();
 
   if (!data.results || data.results.length === 0) {
-    return NextResponse.json({ error: "Not found", googleStatus: data.status, errorMessage: data.error_message }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const top = data.results[0];
