@@ -1,0 +1,438 @@
+"use client";
+
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Loader } from "@googlemaps/js-api-loader";
+
+const RADIUS_OPTIONS = [
+  { label: "1 km",  value: 1000 },
+  { label: "2 km",  value: 2000 },
+  { label: "5 km",  value: 5000 },
+  { label: "10 km", value: 10000 },
+  { label: "25 km", value: 25000 },
+];
+
+const TYPE_OPTIONS = [
+  { label: "Parking Lots",        value: "parking" },
+  { label: "Fairgrounds",         value: "fairground" },
+  { label: "Stadiums",            value: "stadium" },
+  { label: "Convention Centers",  value: "convention_center" },
+];
+
+const PIN_COLORS = {
+  default:  "#6b7280",
+  approved: "#16a34a",
+  active:   "#d97706",  // shortlisted / contacted / responded / site_visit
+  declined: "#dc2626",  // declined / archived
+  added:    "#14b8a6",  // just added this session (teal)
+};
+
+const ACTIVE_STATUSES = new Set(["shortlisted", "contacted", "responded", "site_visit"]);
+const DECLINED_STATUSES = new Set(["declined", "archived"]);
+
+function pinColor(existingStatus, inAddedSet) {
+  if (inAddedSet) return PIN_COLORS.added;
+  if (!existingStatus) return PIN_COLORS.default;
+  if (existingStatus === "approved") return PIN_COLORS.approved;
+  if (ACTIVE_STATUSES.has(existingStatus)) return PIN_COLORS.active;
+  if (DECLINED_STATUSES.has(existingStatus)) return PIN_COLORS.declined;
+  return PIN_COLORS.default;
+}
+
+function makeMarkerIcon(color) {
+  // Simple SVG circle pin
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">
+    <path d="M12 0C5.373 0 0 5.373 0 12c0 8.25 12 20 12 20S24 20.25 24 12C24 5.373 18.627 0 12 0z"
+      fill="${color}" stroke="white" stroke-width="1.5"/>
+    <circle cx="12" cy="12" r="4" fill="white"/>
+  </svg>`;
+  return {
+    url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+    scaledSize: { width: 24, height: 32 },
+    anchor: { x: 12, y: 32 },
+  };
+}
+
+function statusBadgeClass(status) {
+  if (status === "approved") return "bg-green-100 text-green-800";
+  if (ACTIVE_STATUSES.has(status)) return "bg-yellow-100 text-yellow-800";
+  if (DECLINED_STATUSES.has(status)) return "bg-red-100 text-red-800";
+  return "bg-gray-100 text-gray-700";
+}
+
+function statusLabel(s) {
+  return s === "site_visit" ? "Site Visit" : s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export default function SearchPage() {
+  // Search bar state
+  const [searchInput, setSearchInput]   = useState("");
+  const [radius, setRadius]             = useState(5000);
+  const [placeType, setPlaceType]       = useState("parking");
+
+  // Results state
+  const [places, setPlaces]             = useState([]);
+  const [selectedPlace, setSelectedPlace] = useState(null);
+  const [addedPlaceIds, setAddedPlaceIds] = useState(new Set());
+
+  // UI state
+  const [mapLoaded, setMapLoaded]       = useState(false);
+  const [searching, setSearching]       = useState(false);
+  const [error, setError]               = useState(null);
+  const [addingToDb, setAddingToDb]     = useState(false);
+  const [addedMsg, setAddedMsg]         = useState(false);
+
+  // Map refs — stored in refs, not state, to avoid re-render loops
+  const mapRef      = useRef(null);   // DOM element
+  const mapInstance = useRef(null);   // google.maps.Map
+  const markersRef  = useRef([]);     // current markers array
+  const mapsApi     = useRef(null);   // google.maps namespace
+
+  // Initialize map on mount
+  useEffect(() => {
+    const loader = new Loader({
+      apiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+      libraries: ["places"],
+    });
+
+    loader.load().then((google) => {
+      mapsApi.current = google.maps;
+
+      const map = new google.maps.Map(mapRef.current, {
+        center: { lat: 33.749, lng: -84.388 },
+        zoom: 11,
+        mapTypeId: "roadmap",
+        mapTypeControl: true,
+        mapTypeControlOptions: {
+          style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+          mapTypeIds: ["roadmap", "satellite"],
+        },
+        fullscreenControl: false,
+        streetViewControl: false,
+      });
+
+      mapInstance.current = map;
+      setMapLoaded(true);
+    }).catch((err) => {
+      setError("Failed to load Google Maps: " + err.message);
+    });
+  }, []);
+
+  // Update a single marker's icon (e.g. after adding to DB)
+  const refreshMarkerIcon = useCallback((placeId, newAddedSet) => {
+    markersRef.current.forEach((m) => {
+      if (m._placeId === placeId) {
+        const place = places.find((p) => p.placeId === placeId);
+        const icon = makeMarkerIcon(pinColor(place?.existingStatus, newAddedSet.has(placeId)));
+        m.setIcon({
+          url: icon.url,
+          scaledSize: new mapsApi.current.Size(icon.scaledSize.width, icon.scaledSize.height),
+          anchor: new mapsApi.current.Point(icon.anchor.x, icon.anchor.y),
+        });
+      }
+    });
+  }, [places]);
+
+  // Plot markers whenever places changes
+  useEffect(() => {
+    if (!mapInstance.current || !mapsApi.current) return;
+    const google = { maps: mapsApi.current };
+
+    // Clear old markers
+    markersRef.current.forEach((m) => m.setMap(null));
+    markersRef.current = [];
+
+    if (places.length === 0) return;
+
+    const bounds = new google.maps.LatLngBounds();
+
+    places.forEach((place) => {
+      const iconDef = makeMarkerIcon(pinColor(place.existingStatus, addedPlaceIds.has(place.placeId)));
+
+      const marker = new google.maps.Marker({
+        position: { lat: place.lat, lng: place.lng },
+        map: mapInstance.current,
+        title: place.name,
+        icon: {
+          url: iconDef.url,
+          scaledSize: new google.maps.Size(iconDef.scaledSize.width, iconDef.scaledSize.height),
+          anchor: new google.maps.Point(iconDef.anchor.x, iconDef.anchor.y),
+        },
+      });
+
+      marker._placeId = place.placeId;
+
+      marker.addListener("click", () => {
+        setSelectedPlace(place);
+        setAddedMsg(false);
+        mapInstance.current.panTo({ lat: place.lat, lng: place.lng });
+      });
+
+      markersRef.current.push(marker);
+      bounds.extend({ lat: place.lat, lng: place.lng });
+    });
+
+    mapInstance.current.fitBounds(bounds);
+  }, [places]); // addedPlaceIds intentionally excluded — refreshMarkerIcon handles per-pin updates
+
+  const handleSearch = useCallback(async () => {
+    const q = searchInput.trim();
+    if (!q) return;
+
+    setSearching(true);
+    setError(null);
+    setSelectedPlace(null);
+    setAddedMsg(false);
+
+    try {
+      // Step 1: geocode
+      const geoRes = await fetch(
+        `/api/admin/search/geocode?address=${encodeURIComponent(q)}`
+      );
+      const geoData = await geoRes.json();
+      if (!geoRes.ok) throw new Error(geoData.error || "Geocode failed");
+
+      const { lat, lng } = geoData;
+
+      // Step 2: nearby places
+      const placesRes = await fetch(
+        `/api/admin/search?lat=${lat}&lng=${lng}&radius=${radius}&type=${placeType}`
+      );
+      const placesData = await placesRes.json();
+      if (!placesRes.ok) throw new Error(placesData.error || "Places search failed");
+
+      setPlaces(placesData.places || []);
+
+      if ((placesData.places || []).length === 0) {
+        setError("No places found. Try a different location or type.");
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSearching(false);
+    }
+  }, [searchInput, radius, placeType]);
+
+  const handleAddToPipeline = useCallback(async () => {
+    if (!selectedPlace) return;
+    setAddingToDb(true);
+
+    try {
+      const res = await fetch("/api/admin/venues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: selectedPlace.name,
+          address: selectedPlace.address,
+          lat: selectedPlace.lat,
+          lng: selectedPlace.lng,
+          google_place_id: selectedPlace.placeId,
+          source: "google_places",
+          status: "candidate",
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to add venue");
+
+      const newSet = new Set(addedPlaceIds);
+      newSet.add(selectedPlace.placeId);
+      setAddedPlaceIds(newSet);
+      setAddedMsg(true);
+
+      // Update the marker icon immediately
+      refreshMarkerIcon(selectedPlace.placeId, newSet);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAddingToDb(false);
+    }
+  }, [selectedPlace, addedPlaceIds, refreshMarkerIcon]);
+
+  const alreadyAdded = selectedPlace && addedPlaceIds.has(selectedPlace.placeId);
+  const alreadyInDb  = selectedPlace && selectedPlace.existingStatus != null;
+
+  return (
+    <div className="flex flex-col" style={{ height: "calc(100vh - 112px)" }}>
+      {/* Search bar row */}
+      <div className="flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200 shrink-0">
+        <input
+          type="text"
+          className="input flex-1 min-w-0"
+          placeholder="City or ZIP code"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+        />
+
+        <select
+          className="input w-36 shrink-0"
+          value={radius}
+          onChange={(e) => setRadius(Number(e.target.value))}
+        >
+          {RADIUS_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+
+        <select
+          className="input w-48 shrink-0"
+          value={placeType}
+          onChange={(e) => setPlaceType(e.target.value)}
+        >
+          {TYPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+
+        <button
+          className="btn btn-primary shrink-0 flex items-center gap-2"
+          onClick={handleSearch}
+          disabled={searching || !searchInput.trim()}
+        >
+          {searching && (
+            <span className="w-5 h-5 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
+          )}
+          Search
+        </button>
+      </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="notice notice-error mx-6 mt-3 shrink-0" role="alert">
+          {error}
+        </div>
+      )}
+
+      {/* Map + detail panel */}
+      <div className="flex flex-1 min-h-0 relative">
+        {/* Map */}
+        <div ref={mapRef} className="flex-1 min-w-0 h-full" />
+
+        {/* Empty state overlay (shown before any search) */}
+        {!searching && places.length === 0 && !error && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="bg-white/90 rounded-xl px-8 py-6 text-center shadow-sm border border-gray-200 max-w-sm">
+              <p className="text-sm font-medium text-gray-700">
+                Search for a city or ZIP code to find candidate venues
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                Results appear as pins on the map
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Detail panel */}
+        {selectedPlace && (
+          <div className="w-80 shrink-0 bg-white border-l border-gray-200 overflow-y-auto flex flex-col">
+            {/* Panel header */}
+            <div className="flex items-start justify-between p-4 border-b border-gray-100">
+              <div className="flex-1 min-w-0 pr-2">
+                <p className="text-lg font-semibold text-gray-900 leading-snug">
+                  {selectedPlace.name}
+                </p>
+                <p className="text-sm text-gray-500 mt-0.5 leading-snug">
+                  {selectedPlace.address}
+                </p>
+              </div>
+              <button
+                className="text-gray-400 hover:text-gray-600 text-xl leading-none shrink-0 mt-0.5"
+                onClick={() => { setSelectedPlace(null); setAddedMsg(false); }}
+                aria-label="Close detail panel"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Satellite thumbnail */}
+            <div className="px-4 pt-4">
+              <img
+                src={`https://maps.googleapis.com/maps/api/staticmap?center=${selectedPlace.lat},${selectedPlace.lng}&zoom=17&size=280x180&maptype=satellite&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`}
+                alt="Satellite view"
+                width={280}
+                height={180}
+                className="rounded-lg w-full object-cover"
+              />
+            </div>
+
+            {/* Details */}
+            <div className="px-4 py-4 space-y-3 flex-1">
+              {/* Rating */}
+              {selectedPlace.rating != null && (
+                <div className="text-sm text-gray-700">
+                  <span className="text-yellow-500">★</span>{" "}
+                  <span className="font-medium tabular-nums">{selectedPlace.rating.toFixed(1)}</span>
+                  {selectedPlace.userRatingsTotal != null && (
+                    <span className="text-gray-400 ml-1">
+                      ({selectedPlace.userRatingsTotal.toLocaleString()} reviews)
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Types */}
+              {selectedPlace.types && selectedPlace.types.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedPlace.types
+                    .filter((t) => t !== "point_of_interest" && t !== "establishment")
+                    .slice(0, 5)
+                    .map((t) => (
+                      <span
+                        key={t}
+                        className="inline-block bg-gray-100 text-gray-600 text-xs rounded-full px-2 py-0.5"
+                      >
+                        {t.replace(/_/g, " ")}
+                      </span>
+                    ))}
+                </div>
+              )}
+
+              {/* Existing status chip */}
+              {alreadyInDb && !alreadyAdded && (
+                <div>
+                  <span
+                    className={`inline-block text-xs font-semibold uppercase tracking-wide rounded-full px-3 py-1 ${statusBadgeClass(selectedPlace.existingStatus)}`}
+                  >
+                    {statusLabel(selectedPlace.existingStatus)}
+                  </span>
+                </div>
+              )}
+
+              {/* Google Maps link */}
+              <a
+                href={`https://www.google.com/maps/place/?q=place_id:${selectedPlace.placeId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-brand-500 hover:text-brand-600 underline underline-offset-2"
+              >
+                View on Google Maps ↗
+              </a>
+            </div>
+
+            {/* Action footer */}
+            <div className="px-4 pb-5 shrink-0">
+              {alreadyAdded ? (
+                <p className="text-sm font-medium text-teal-600">
+                  Added to pipeline
+                </p>
+              ) : alreadyInDb ? (
+                <p className="text-sm text-gray-500 italic">Already in pipeline</p>
+              ) : (
+                <button
+                  className="btn btn-primary w-full flex items-center justify-center gap-2"
+                  onClick={handleAddToPipeline}
+                  disabled={addingToDb}
+                >
+                  {addingToDb && (
+                    <span className="w-5 h-5 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
+                  )}
+                  Add to pipeline
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

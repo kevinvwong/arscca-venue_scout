@@ -6,6 +6,7 @@ const TABS = [
   { label: "Venues",   href: "/admin" },
   { label: "Pipeline", href: "/admin/pipeline" },
   { label: "Outreach", href: "/admin/outreach" },
+  { label: "Search",   href: "/admin/search" },
   { label: "Settings", href: "/admin/settings" },
 ];
 
@@ -52,9 +53,11 @@ export default function AdminLayout({ children }) {
         </div>
       </div>
 
-      <div className="mx-auto max-w-admin px-6 py-8">
-        {children}
-      </div>
+      {pathname === "/admin/search" ? children : (
+        <div className="mx-auto max-w-admin px-6 py-8">
+          {children}
+        </div>
+      )}
     </div>
   );
 }
