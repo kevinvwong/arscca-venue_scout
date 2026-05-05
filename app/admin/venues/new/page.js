@@ -41,7 +41,7 @@ export default function NewVenuePage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to save.");
-      router.push("/admin");
+      router.push(`/admin?score=${data.venue.id}`);
     } catch (e) {
       setError(e.message);
       setSaving(false);

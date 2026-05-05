@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { getAssessorUrl, hasAssessorLink } from "@/lib/assessor-links";
 
 const STATUSES = [
@@ -79,6 +79,8 @@ export default function VenuesPage() {
   const [overrideNote, setOverrideNote]           = useState("");
   const [savingOverride, setSavingOverride]       = useState(false);
 
+  const autoScoreFired = useRef(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -106,6 +108,34 @@ export default function VenuesPage() {
       .then((d) => { if (d.stats) setStats(d.stats); })
       .catch(() => {});
   }, []);
+
+  // Auto-open and score a venue when redirected from /admin/venues/new with ?score=ID
+  useEffect(() => {
+    if (loading || venues.length === 0 || autoScoreFired.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const scoreId = params.get("score");
+    if (!scoreId) return;
+    const venue = venues.find((v) => String(v.id) === scoreId);
+    if (!venue) return;
+    autoScoreFired.current = true;
+    window.history.replaceState({}, "", "/admin");
+    openEdit(venue);
+    // Defer scoring one tick so state from openEdit settles first
+    setTimeout(() => {
+      setScoring(true);
+      setScoreResult(null);
+      setScoreError(null);
+      fetch(`/api/admin/venues/${venue.id}/score`, { method: "POST" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setScoreResult(data.assessment);
+          load();
+        })
+        .catch((e) => setScoreError(e.message))
+        .finally(() => setScoring(false));
+    }, 0);
+  }, [loading, venues]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function openEdit(venue) {
     setSelected(venue);
@@ -523,25 +553,43 @@ export default function VenuesPage() {
                       )}
                     </div>
 
-                    {scoreResult.surface_type && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
-                          Surface
-                        </span>
-                        <span className="inline-flex items-center rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">
-                          {scoreResult.surface_type}
-                        </span>
-                      </div>
-                    )}
+                    {/* Score breakdown */}
+                    <div className="mt-3 space-y-2">
+                      {[
+                        { label: "AI Assessment", weight: "60%", value: scoreResult.suitability_score, color: "bg-teal-500" },
+                        { label: "Lot Size", weight: "25%", value: scoreResult.lot_score, color: "bg-blue-400" },
+                        { label: "Highway Access", weight: "15%", value: scoreResult.highway_score, color: "bg-purple-400" },
+                      ].map(({ label, weight, value, color }) => (
+                        <div key={label}>
+                          <div className="flex justify-between mb-0.5">
+                            <span className="text-[10px] text-gray-500">{label} <span className="text-gray-400">({weight})</span></span>
+                            <span className="text-[10px] font-semibold tabular-nums text-gray-700">{value ?? "—"}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-gray-100">
+                            <div
+                              className={`h-1.5 rounded-full ${color} transition-all duration-500`}
+                              style={{ width: `${value ?? 0}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
 
-                    {scoreResult.estimated_total_acres != null && (
-                      <div>
-                        <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
-                          Est. Acres
-                        </span>
-                        <span className="ml-2 tabular-nums text-gray-800">
-                          {scoreResult.estimated_total_acres}
-                        </span>
+                    {(scoreResult.surface_type || scoreResult.estimated_total_acres) && (
+                      <div className="flex gap-3 mt-2 pt-2 border-t border-gray-200">
+                        {scoreResult.surface_type && (
+                          <span className="text-xs bg-gray-200 text-gray-700 rounded-full px-2 py-0.5 capitalize">
+                            {scoreResult.surface_type}
+                          </span>
+                        )}
+                        {scoreResult.estimated_total_acres && (
+                          <span className="text-xs text-gray-600 tabular-nums">
+                            ~{scoreResult.estimated_total_acres} acres
+                          </span>
+                        )}
+                        {scoreResult.confidence && (
+                          <span className="text-xs text-gray-400 ml-auto">{scoreResult.confidence} confidence</span>
+                        )}
                       </div>
                     )}
 
@@ -562,11 +610,6 @@ export default function VenuesPage() {
                       </p>
                     )}
 
-                    {scoreResult.confidence && (
-                      <p className="text-[11px] text-ink-subtle">
-                        Confidence: {scoreResult.confidence}
-                      </p>
-                    )}
                   </div>
                 )}
 
