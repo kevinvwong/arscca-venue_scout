@@ -193,8 +193,8 @@ export default function SearchPage() {
     mapInstance.current.fitBounds(bounds);
   }, [places]); // addedPlaceIds intentionally excluded — refreshMarkerIcon handles per-pin updates
 
-  const handleSearch = useCallback(async () => {
-    const q = searchInput.trim();
+  const handleSearch = useCallback(async (overrideQuery) => {
+    const q = (overrideQuery ?? searchInput).trim();
     if (!q) return;
 
     setSearching(true);
@@ -397,7 +397,7 @@ export default function SearchPage() {
             // Auto-search on complete US ZIP code (5 digits or ZIP+4)
             if (/^\d{5}(-\d{4})?$/.test(val.trim())) {
               clearTimeout(autoSearchTimer.current);
-              autoSearchTimer.current = setTimeout(handleSearch, 400);
+              autoSearchTimer.current = setTimeout(() => handleSearch(val.trim()), 400);
             }
           }}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
