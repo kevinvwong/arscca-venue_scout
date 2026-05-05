@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { getAssessorUrl, hasAssessorLink } from "@/lib/assessor-links";
 
 const STATUSES = [
   "candidate", "shortlisted", "contacted", "responded",
@@ -59,6 +60,9 @@ export default function VenuesPage() {
   const [scoring, setScoring]           = useState(false);
   const [scoreResult, setScoreResult]   = useState(null);
   const [scoreError, setScoreError]     = useState(null);
+  const [fetchingPlaces, setFetchingPlaces] = useState(false);
+  const [placesError, setPlacesError]       = useState(null);
+  const [placesWebsite, setPlacesWebsite]   = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,6 +93,9 @@ export default function VenuesPage() {
     setScoring(false);
     setScoreResult(null);
     setScoreError(null);
+    setFetchingPlaces(false);
+    setPlacesError(null);
+    setPlacesWebsite(null);
   }
 
   function closeEdit() {
@@ -144,6 +151,27 @@ export default function VenuesPage() {
       setScoreError(e.message);
     } finally {
       setScoring(false);
+    }
+  }
+
+  async function fetchPlacesDetails() {
+    setFetchingPlaces(true);
+    setPlacesError(null);
+    try {
+      const res = await fetch(`/api/admin/venues/${selected.id}/places-details`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to fetch details.");
+      // Auto-populate editForm fields if they're currently empty
+      setEditForm((prev) => ({
+        ...prev,
+        owner_phone: prev.owner_phone || data.phone || prev.owner_phone,
+        owner_source: prev.owner_source || (data.phone || data.website ? "google_places" : prev.owner_source),
+      }));
+      if (data.website) setPlacesWebsite(data.website);
+    } catch (e) {
+      setPlacesError(e.message);
+    } finally {
+      setFetchingPlaces(false);
     }
   }
 
@@ -463,6 +491,58 @@ export default function VenuesPage() {
                   Owner / Contact
                 </p>
                 <div className="space-y-3">
+                  {/* Owner identification tools */}
+                  <div className="border border-gray-200 rounded-lg p-3 space-y-2 bg-gray-50">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
+                        Owner Identification
+                      </span>
+                      {/* Owner identified badge — shown when owner_email or owner_phone is filled */}
+                      {(editForm.owner_email || editForm.owner_phone) && (
+                        <span className="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                          Owner identified
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Auto-fill from Google Places */}
+                    {selected.google_place_id && (
+                      <div>
+                        <button
+                          onClick={fetchPlacesDetails}
+                          disabled={fetchingPlaces}
+                          className="text-xs text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1.5"
+                        >
+                          {fetchingPlaces && <span className="w-3 h-3 border border-brand-300 border-t-brand-600 rounded-full animate-spin inline-block" />}
+                          Auto-fill from Google Places
+                        </button>
+                        {placesWebsite && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Website: <a href={placesWebsite} target="_blank" rel="noopener noreferrer" className="text-brand-600 underline">{placesWebsite}</a>
+                          </p>
+                        )}
+                        {placesError && (
+                          <p className="text-xs text-red-600 mt-1">{placesError}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* County assessor link */}
+                    {hasAssessorLink(editForm.state) && (
+                      <div>
+                        <a
+                          href={getAssessorUrl(editForm.state)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-brand-600 hover:text-brand-700 font-medium underline underline-offset-2"
+                        >
+                          Search {editForm.state} county assessor records ↗
+                        </a>
+                        <p className="text-xs text-gray-400 mt-0.5">Look up the property owner in public records</p>
+                      </div>
+                    )}
+                  </div>
+
                   <Field label="Owner name">
                     <input
                       className="input"
