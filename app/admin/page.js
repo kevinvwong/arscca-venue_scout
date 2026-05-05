@@ -63,6 +63,13 @@ export default function VenuesPage() {
   const [fetchingPlaces, setFetchingPlaces] = useState(false);
   const [placesError, setPlacesError]       = useState(null);
   const [placesWebsite, setPlacesWebsite]   = useState(null);
+  const [draftingOutreach, setDraftingOutreach] = useState(false);
+  const [outreachDraft, setOutreachDraft]       = useState(null);
+  const [outreachError, setOutreachError]       = useState(null);
+  const [sendingOutreach, setSendingOutreach]   = useState(false);
+  const [outreachSent, setOutreachSent]         = useState(false);
+  const [outreachEventType, setOutreachEventType] = useState("teen driver safety training event");
+  const [outreachOrgName, setOutreachOrgName]     = useState("Atlanta Region SCCA — Tire Rack Street Survival");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,6 +103,13 @@ export default function VenuesPage() {
     setFetchingPlaces(false);
     setPlacesError(null);
     setPlacesWebsite(null);
+    setDraftingOutreach(false);
+    setOutreachDraft(null);
+    setOutreachError(null);
+    setSendingOutreach(false);
+    setOutreachSent(false);
+    setOutreachEventType("teen driver safety training event");
+    setOutreachOrgName("Atlanta Region SCCA — Tire Rack Street Survival");
   }
 
   function closeEdit() {
@@ -172,6 +186,60 @@ export default function VenuesPage() {
       setPlacesError(e.message);
     } finally {
       setFetchingPlaces(false);
+    }
+  }
+
+  async function draftOutreach() {
+    setDraftingOutreach(true);
+    setOutreachError(null);
+    try {
+      const res = await fetch(`/api/admin/venues/${selected.id}/draft-outreach`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventType: outreachEventType, orgName: outreachOrgName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Drafting failed.");
+      setOutreachDraft(data);
+    } catch (e) {
+      setOutreachError(e.message);
+    } finally {
+      setDraftingOutreach(false);
+    }
+  }
+
+  async function sendOutreach() {
+    if (!outreachDraft || !selected.owner_email) return;
+    setSendingOutreach(true);
+    try {
+      const res = await fetch(`/api/admin/outreach/${outreachDraft.outreachId}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: selected.owner_email,
+          subject: outreachDraft.subject,
+          body: outreachDraft.body,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Send failed.");
+      setOutreachSent(true);
+      // Advance venue status to 'contacted'
+      const patchRes = await fetch(`/api/admin/venues/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "contacted" }),
+      });
+      const patchData = await patchRes.json();
+      if (patchRes.ok) {
+        setVenues((prev) => prev.map((v) => v.id === patchData.venue.id ? patchData.venue : v));
+        setSelected(patchData.venue);
+        setEditForm({ ...patchData.venue });
+      }
+    } catch (e) {
+      setOutreachError(e.message);
+    } finally {
+      setSendingOutreach(false);
     }
   }
 
@@ -567,6 +635,71 @@ export default function VenuesPage() {
                     />
                   </Field>
                 </div>
+              </div>
+
+              {/* Outreach */}
+              <div className="pt-2 border-t border-gray-100">
+                <div className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle mb-2">Outreach</div>
+
+                {!outreachDraft ? (
+                  <div className="space-y-2">
+                    <div>
+                      <label className="label">Event type</label>
+                      <input className="input w-full text-sm" value={outreachEventType} onChange={(e) => setOutreachEventType(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label">Organization name</label>
+                      <input className="input w-full text-sm" value={outreachOrgName} onChange={(e) => setOutreachOrgName(e.target.value)} />
+                    </div>
+                    <button
+                      onClick={draftOutreach}
+                      disabled={draftingOutreach}
+                      className="w-full flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+                    >
+                      {draftingOutreach ? <><span className="w-4 h-4 border-2 border-gray-600 border-t-white rounded-full animate-spin" />Drafting…</> : "Draft inquiry email"}
+                    </button>
+                    {outreachError && <div className="notice notice-error text-xs" role="alert">{outreachError}</div>}
+                  </div>
+                ) : outreachSent ? (
+                  <div className="text-sm text-green-700 font-medium">Email sent — venue moved to Contacted.</div>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="label">Subject</label>
+                      <input
+                        className="input w-full text-sm"
+                        value={outreachDraft.subject}
+                        onChange={(e) => setOutreachDraft((d) => ({ ...d, subject: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Body</label>
+                      <textarea
+                        className="input w-full text-sm"
+                        rows={10}
+                        value={outreachDraft.body}
+                        onChange={(e) => setOutreachDraft((d) => ({ ...d, body: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setOutreachDraft(null); setOutreachError(null); }}
+                        className="btn btn-outline text-sm flex-1"
+                      >
+                        Re-draft
+                      </button>
+                      <button
+                        onClick={sendOutreach}
+                        disabled={sendingOutreach || !selected.owner_email}
+                        title={!selected.owner_email ? "Add owner email first" : ""}
+                        className="btn btn-primary text-sm flex-1 flex items-center justify-center gap-2"
+                      >
+                        {sendingOutreach ? <span className="w-4 h-4 border-2 border-teal-200 border-t-white rounded-full animate-spin" /> : null}
+                        {selected.owner_email ? `Send to ${selected.owner_email}` : "No owner email"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <Field label="Notes">
