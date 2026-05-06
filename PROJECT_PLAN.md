@@ -276,7 +276,7 @@ search_profiles (
 - [ ] API key auth on the v1 endpoint (`VENUESCOUT_API_KEY` env var)
 
 ### Phase 9 — Search Quality
-- [ ] **Google Places fallback**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest` — catches lots that exist in Google's index but have no OSM polygon (common for newer developments and private lots)
+- [ ] **Google Places fallback with OSM polygon size gate**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest`, then for each Places hit reverse-query OSM (Overpass `around`/`is_in`) for an overlapping polygon — keep only if a polygon exists and meets the 125,000 sq ft floor; drop polygon-less hits. Catches the "OSM has the polygon but with the wrong tag" case without paying Claude vision cost on undersized lots
 - [ ] **Sort by usable acres**: when Claude returned a `usable_acres` value, use it as the primary sort key instead of OSM polygon area, which often over- or under-counts
 - [ ] **Composite score recalculation on manual edit**: when an organizer edits `estimated_acres` in the venue form, recompute the size component of `composite_score` automatically
 - [ ] **"Needs revisit" flag**: mark a venue for re-analysis with a reason (e.g., "winter image — re-check in spring", "construction in progress") without changing its pipeline status
