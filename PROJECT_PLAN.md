@@ -4,7 +4,7 @@
 **Origin:** Spun off from TRSS Volunteer Management System (arscca-VMS), May 2026
 **Pilot use case:** Tire Rack Street Survival — finding large paved lots for teen driver safety events
 **Broader applicability:** Any event requiring a large flat outdoor site: autocross, car shows, drift days, food truck festivals, community events
-**Status:** Phases 1–3, 5–6 complete; Phase 4, 7 partial; Phases 8–10 planned
+**Status:** Phases 1–3, 5–6 complete; Phases 4, 7, 9 partial; Phases 8, 10 planned
 **Last Updated:** May 6, 2026
 
 ---
@@ -239,7 +239,7 @@ search_profiles (
 - [x] Manual entry form: owner name, email, phone, source
 - [x] Notes field for ownership complexity
 - [ ] **Auto-populate via paid parcel API** (ATTOM or Regrid): given a lat/lng or address, return owner name, mailing address, and entity type (LLC vs. individual) — eliminates the manual assessor lookup step for most properties
-- [ ] "Owner identified" status indicator on pipeline card when `owner_email` or `owner_phone` is present
+- [x] "Owner identified" status indicator on pipeline card when `owner_email` or `owner_phone` is present
 
 ### Phase 5 — AI Outreach Drafting ✅
 - [x] "Draft inquiry email" in pipeline drawer and venue edit panel
@@ -259,15 +259,15 @@ search_profiles (
 - [x] Site visit checklist: actual acres, surface condition, perimeter, restrooms, electrical, security, nearest hospital, photo links
 - [x] Timeline page (`/admin/venues/[id]/timeline`): full chronological history of assessments, outreach, and notes; add notes inline
 - [x] Timeline linked from pipeline drawer and venue edit panel
-- [ ] **Inline notes from pipeline drawer**: add a note without navigating to the timeline page
-- [ ] **Drawer stays open on stage advance**: currently closes after advancing; should stay open and reflect the new status
+- [x] **Inline notes from pipeline drawer**: add a note without navigating to the timeline page
+- [x] **Drawer stays open on stage advance**: currently closes after advancing; should stay open and reflect the new status
 - [ ] **Drag-to-advance**: drag kanban cards between columns as an alternative to the advance button
 
 ### Phase 7 — Institutional Memory (partial)
 - [x] Approved venue library (`/admin/library`): all `approved` venues, filterable by state, searchable by name
 - [x] Full venue timeline with notes, outreach, and assessment history
 - [x] Export: approved venues as JSON via `/api/admin/library?export=1`
-- [ ] **Declined venue warning**: when adding a search result to the pipeline, check if the `google_place_id` is already in `venues` with status `declined`; surface the decline reason and require confirmation to re-add
+- [x] **Declined venue warning**: when adding a search result to the pipeline, check if the `google_place_id` is already in `venues` with status `declined`; surface the decline reason and require confirmation to re-add
 - [ ] **Cross-org sharing**: program admin can mark venues "nationally approved" — visible to all orgs
 
 ### Phase 8 — arscca-VMS Integration
@@ -278,7 +278,7 @@ search_profiles (
 ### Phase 9 — Search Quality
 - [ ] **Google Places fallback with OSM polygon size gate**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest`, then for each Places hit reverse-query OSM (Overpass `around`/`is_in`) for an overlapping polygon — keep only if a polygon exists and meets the 125,000 sq ft floor; drop polygon-less hits. Catches the "OSM has the polygon but with the wrong tag" case without paying Claude vision cost on undersized lots
 - [ ] **Sort by usable acres**: when Claude returned a `usable_acres` value, use it as the primary sort key instead of OSM polygon area, which often over- or under-counts
-- [ ] **Composite score recalculation on manual edit**: when an organizer edits `estimated_acres` in the venue form, recompute the size component of `composite_score` automatically
+- [x] **Composite score recalculation on manual edit**: when an organizer edits `estimated_acres` in the venue form, recompute the size component of `composite_score` automatically
 - [ ] **"Needs revisit" flag**: mark a venue for re-analysis with a reason (e.g., "winter image — re-check in spring", "construction in progress") without changing its pipeline status
 - [ ] **Bulk add to pipeline**: checkbox-select multiple search results and add them all in one action
 
