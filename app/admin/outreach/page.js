@@ -218,8 +218,36 @@ function RespondInline({ id, onConfirm, onCancel, submitting }) {
   );
 }
 
-function OutreachRow({ record, respondingId, onMarkRespond, onCancelRespond, onConfirmRespond, submitMap }) {
+function SendInline({ record, onConfirm, onCancel, submitting }) {
+  return (
+    <div className="mt-3 border border-blue-200 rounded-lg p-3 bg-blue-50 space-y-2">
+      <p className="text-[10px] uppercase tracking-widest font-semibold text-blue-700">Send email</p>
+      {!record.owner_email ? (
+        <p className="text-xs text-red-700">No owner email on file for this venue.</p>
+      ) : (
+        <p className="text-xs text-gray-700">
+          Sending to: <span className="font-medium">{record.owner_email}</span>
+        </p>
+      )}
+      <div className="flex gap-2">
+        <button
+          onClick={onConfirm}
+          disabled={submitting || !record.owner_email}
+          className="btn btn-primary text-sm"
+        >
+          {submitting ? <><Spinner /> Sending…</> : "Confirm send"}
+        </button>
+        <button onClick={onCancel} className="btn btn-outline text-sm">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OutreachRow({ record, respondingId, onMarkRespond, onCancelRespond, onConfirmRespond, submitMap, sendingId, onMarkSend, onCancelSend, onConfirmSend }) {
   const isResponding = respondingId === record.id;
+  const isSending    = sendingId === record.id;
   const submitting   = submitMap[record.id] ?? false;
 
   const pastDue = record.sent_at && !record.response_received_at && isPast(record.follow_up_due_at);
@@ -292,6 +320,26 @@ function OutreachRow({ record, respondingId, onMarkRespond, onCancelRespond, onC
             <p className="mt-1.5 text-xs text-gray-600 italic">{record.response_notes}</p>
           )}
 
+          {/* Send button — email drafts only */}
+          {!record.sent_at && record.channel === "email" && !isSending && (
+            <button
+              onClick={() => onMarkSend(record.id)}
+              className="mt-2 btn btn-primary text-xs py-1 px-2.5 h-auto"
+            >
+              Send email
+            </button>
+          )}
+
+          {/* Inline send confirm */}
+          {isSending && (
+            <SendInline
+              record={record}
+              onConfirm={() => onConfirmSend(record.id)}
+              onCancel={onCancelSend}
+              submitting={submitting}
+            />
+          )}
+
           {/* Mark Response button */}
           {record.sent_at && !record.response_received_at && !isResponding && (
             <button
@@ -336,6 +384,7 @@ export default function OutreachPage() {
   const [submittingLog,setSubmittingLog]= useState(false);
   const [logError,     setLogError]     = useState(null);
   const [respondingId, setRespondingId] = useState(null); // which row is open
+  const [sendingId,    setSendingId]    = useState(null); // which draft row is confirming send
   const [submitMap,    setSubmitMap]    = useState({});   // { [id]: bool }
 
   const load = useCallback(async () => {
@@ -418,6 +467,29 @@ export default function OutreachPage() {
     }
   }
 
+  // ── Send draft email ──────────────────────────────────────────────────────
+
+  async function handleConfirmSend(id) {
+    const record = outreach.find((o) => o.id === id);
+    if (!record?.owner_email) return;
+    setSubmitMap((m) => ({ ...m, [id]: true }));
+    try {
+      const res  = await fetch(`/api/admin/outreach/${id}/send`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ to: record.owner_email, subject: record.subject, body: record.body }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to send email.");
+      setSendingId(null);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSubmitMap((m) => ({ ...m, [id]: false }));
+    }
+  }
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -484,9 +556,13 @@ export default function OutreachPage() {
                   key={record.id}
                   record={record}
                   respondingId={respondingId}
-                  onMarkRespond={(id) => { setRespondingId(id); setError(null); }}
+                  onMarkRespond={(id) => { setRespondingId(id); setSendingId(null); setError(null); }}
                   onCancelRespond={() => setRespondingId(null)}
                   onConfirmRespond={handleConfirmRespond}
+                  sendingId={sendingId}
+                  onMarkSend={(id) => { setSendingId(id); setRespondingId(null); setError(null); }}
+                  onCancelSend={() => setSendingId(null)}
+                  onConfirmSend={handleConfirmSend}
                   submitMap={submitMap}
                 />
               ))

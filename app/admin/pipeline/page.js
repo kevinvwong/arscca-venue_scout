@@ -159,7 +159,7 @@ function KanbanColumn({ stage, venues, onCardClick }) {
 
 // ─── Drawer ───────────────────────────────────────────────────────────────────
 
-function Drawer({ venue, onClose, onAdvance, advancing, advanceError }) {
+function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }) {
   const [showDeclineForm, setShowDeclineForm] = useState(false);
   const [declineReason,   setDeclineReason]   = useState("");
   const [declineCategory, setDeclineCategory] = useState("");
@@ -169,8 +169,66 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError }) {
   const [siteVisitError,  setSiteVisitError]  = useState(null);
   const [siteVisitSaved,  setSiteVisitSaved]  = useState(false);
 
+  // Email draft/send state
+  const [showEmail,       setShowEmail]       = useState(false);
+  const [eventType,       setEventType]       = useState("teen driver safety training event");
+  const [orgName,         setOrgName]         = useState("Atlanta Region SCCA — Tire Rack Street Survival");
+  const [drafting,        setDrafting]        = useState(false);
+  const [draft,           setDraft]           = useState(null);
+  const [draftError,      setDraftError]      = useState(null);
+  const [sending,         setSending]         = useState(false);
+  const [emailSent,       setEmailSent]       = useState(false);
+
   const status = venue.status;
   const pastDue = isPastDue(venue.follow_up_due_at);
+
+  async function draftEmail() {
+    setDrafting(true);
+    setDraftError(null);
+    try {
+      const res  = await fetch(`/api/admin/venues/${venue.id}/draft-outreach`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ eventType, orgName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Drafting failed.");
+      setDraft(data);
+    } catch (e) {
+      setDraftError(e.message);
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  async function sendEmail() {
+    if (!draft || !venue.owner_email) return;
+    setSending(true);
+    setDraftError(null);
+    try {
+      const res  = await fetch(`/api/admin/outreach/${draft.outreachId}/send`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ to: venue.owner_email, subject: draft.subject, body: draft.body }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Send failed.");
+      setEmailSent(true);
+      // Advance to contacted if still candidate/shortlisted
+      if (["candidate", "shortlisted"].includes(status)) {
+        await fetch(`/api/admin/pipeline/${venue.id}/advance`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ status: "contacted" }),
+        });
+        if (onReload) onReload();
+      }
+    } catch (e) {
+      setDraftError(e.message);
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function submitSiteVisit() {
     setSavingSiteVisit(true);
@@ -506,6 +564,90 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError }) {
             </div>
           )}
 
+          {/* Email outreach */}
+          {!["declined", "archived"].includes(status) && (
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <button
+                onClick={() => { setShowEmail((p) => !p); setDraft(null); setDraftError(null); setEmailSent(false); }}
+                className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 text-left hover:bg-gray-100 transition-colors"
+              >
+                <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
+                  Draft Inquiry Email
+                </span>
+                <span className="text-gray-400 text-xs">{showEmail ? "▲" : "▼"}</span>
+              </button>
+
+              {showEmail && (
+                <div className="px-4 py-4 space-y-3">
+                  {emailSent ? (
+                    <div className="notice-success text-sm">Email sent — venue marked as Contacted.</div>
+                  ) : !draft ? (
+                    <>
+                      {draftError && <div className="notice-error text-sm" role="alert">{draftError}</div>}
+                      <div>
+                        <label className="label text-xs">Event type</label>
+                        <input className="input text-sm" value={eventType} onChange={(e) => setEventType(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="label text-xs">Organization name</label>
+                        <input className="input text-sm" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+                      </div>
+                      {!venue.owner_email && (
+                        <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
+                          No owner email on file — add it in the Venues list before sending.
+                        </p>
+                      )}
+                      <button
+                        onClick={draftEmail}
+                        disabled={drafting}
+                        className="btn btn-primary w-full justify-center text-sm"
+                      >
+                        {drafting ? <><Spinner /> Drafting…</> : "Draft with AI"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {draftError && <div className="notice-error text-sm" role="alert">{draftError}</div>}
+                      <div>
+                        <label className="label text-xs">Subject</label>
+                        <input
+                          className="input text-sm"
+                          value={draft.subject}
+                          onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-xs">Body</label>
+                        <textarea
+                          className="input text-sm resize-none"
+                          rows={10}
+                          value={draft.body}
+                          onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => { setDraft(null); setDraftError(null); }}
+                          className="btn btn-outline text-sm flex-1"
+                        >
+                          Re-draft
+                        </button>
+                        <button
+                          onClick={sendEmail}
+                          disabled={sending || !venue.owner_email}
+                          title={!venue.owner_email ? "No owner email on file" : ""}
+                          className="btn btn-primary text-sm flex-1 justify-center"
+                        >
+                          {sending ? <><Spinner /> Sending…</> : venue.owner_email ? `Send to ${venue.owner_email}` : "No owner email"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Score */}
           <div>
             <p className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle mb-2">Assessment</p>
@@ -700,6 +842,7 @@ export default function PipelinePage() {
           onAdvance={advanceVenue}
           advancing={advancing}
           advanceError={advanceError}
+          onReload={load}
         />
       )}
     </div>
