@@ -4,8 +4,8 @@
 **Origin:** Spun off from TRSS Volunteer Management System (arscca-VMS), May 2026
 **Pilot use case:** Tire Rack Street Survival — finding large paved lots for teen driver safety events
 **Broader applicability:** Any event requiring a large flat outdoor site: autocross, car shows, drift days, food truck festivals, community events
-**Status:** Pre-development — project plan only
-**Last Updated:** May 4, 2026
+**Status:** Phases 1–3, 5–6 complete; Phase 4, 7 partial; Phases 8–10 planned
+**Last Updated:** May 6, 2026
 
 ---
 
@@ -185,115 +185,108 @@ search_profiles (
 
 ## Phase Plan
 
-### Phase 1 — Foundation
-- [ ] Next.js project, Neon DB, NextAuth (credentials + Google OAuth)
-- [ ] `organizations`, `users`, `venues` tables + idempotent migrations
-- [ ] Org + user setup: admin creates org, invites organizers by email
-- [ ] Manual venue entry form: name, address, lot type, status, owner contact, notes
-- [ ] Venue list view: status filter, state/city filter, sort by size
+### Phase 1 — Foundation ✅
+- [x] Next.js project, Neon DB, NextAuth (credentials provider)
+- [x] `organizations`, `users`, `venues` tables + idempotent migrations
+- [x] Org + user setup: admin creates org, invites organizers by email (Settings page)
+- [x] Manual venue entry form: name, address, lot type, status, owner contact, notes
+- [x] Venue list view: status filter, state/city filter, text search, sort by score
 
-### Phase 2 — Map & Search
-- [ ] Google Maps JavaScript API: interactive map, satellite/roadmap toggle
-- [ ] Candidate search: city or zip + radius → Google Places API for parking lots, fairgrounds, stadiums, convention centers
-- [ ] Results plotted as color-coded status pins; click to open detail panel
-- [ ] Detail panel: name, address, estimated size, satellite thumbnail, current status, "Add to pipeline" button
-- [ ] "Add to pipeline" saves candidate to `venues` table with `source = 'google_places'`
-- [ ] OpenStreetMap Overpass API fallback for lot polygon geometry when Places data is thin
+### Phase 2 — Map & Search ✅
+- [x] Google Maps JavaScript API: interactive map, satellite/roadmap toggle
+- [x] Candidate search: zip or city + radius → **OSM Overpass API** (not Google Places) discovers parking lots, fairgrounds, stadiums, leisure venues, commercial/industrial polygons by polygon geometry
+- [x] Results plotted as color-coded score pins; click to open detail panel
+- [x] Detail panel: name, address, estimated acres, disqualifiers, surface, shape, lot type, scores, owner contact, "Add to pipeline" button
+- [x] "Add to pipeline" saves candidate to `venues` table with `source = 'osm'`
+- [x] Saved search profiles: save center + radius, reload and re-run with one click
+- [x] Minimum lot size filter: 125,000 sq ft (≈2.87 acres) — hard floor, enforced in OSM query
+- [x] OSM relation (multipolygon) support: large venue complexes mapped as relations are included via `>>` recursion
 
-### Phase 3 — AI Scoring Engine
+### Phase 3 — AI Scoring Engine ✅
 
-**Goal:** Every candidate that enters the pipeline gets an automated suitability score within seconds of being added — no manual assessment required until the site visit.
+**Goal:** Every candidate gets an automated suitability score within seconds — no manual assessment required until the site visit.
 
-#### 3A — Satellite image fetch
-- [ ] For each venue with lat/lng, fetch a satellite image via Google Maps Static API at zoom 18 (covers roughly a 300m × 300m area — right for most parking lots)
-- [ ] Cache the image URL in `venue_ai_assessments.satellite_image_url`; re-fetch if lat/lng changes
-- [ ] For very large venues (estimated >20 acres), fetch a second image at zoom 17 and stitch context
+#### 3A — Satellite image fetch ✅
+- [x] Fetch satellite image via Google Maps Static API at zoom 18 for each candidate
+- [x] Image URL cached in `venue_ai_assessments.satellite_image_url`
 
-#### 3B — Vision analysis via Claude
-- [ ] POST the satellite image + structured prompt to Claude (multimodal):
+#### 3B — Vision analysis via Claude ✅
+- [x] POST satellite image + SCCA autocross scout prompt to Claude Sonnet (multimodal)
+- [x] Domain-specific prompt covers: hard disqualifiers, lot type priority ranking (stadium/fairground/racetrack/airfield > active retail), surface scoring, run-off buffer, residential proximity
+- [x] Returns structured JSON: `total_acres`, `usable_acres`, `surface_type`, `surface_condition` (1–5), `shape`, `internal_obstructions`, `runoff_adequate`, `residential_proximity`, `lot_type`, `disqualifiers`, `ai_score`, `confidence`, `notes`
+- [x] Hard disqualifiers cap composite score at 35
+- [x] Low-confidence assessments noted in `assessment_notes`
 
-  ```
-  You are assessing a satellite image of a parking lot at [address] for suitability
-  as a driving skills event venue. The event needs a large flat paved surface.
+#### 3C — Composite scoring ✅
+- [x] **Size score** (50% weight): `usable_acres` → `lotScoreFromAcres()`, scales meaningfully to 60+ acres
+- [x] **AI score** (35% weight): `ai_score` from vision analysis
+- [x] **Highway access score** (15% weight): driving minutes to nearest highway via Directions API; ≤2 min = 100, ≥20 min = 0
+- [x] Composite stored in `venues.composite_score`
+- [x] Score breakdown bars visible in detail panel (size / AI / highway)
 
-  Analyze the image and return JSON with these fields:
-  - estimated_total_acres: full lot area visible (number)
-  - estimated_clear_acres: usable open area after subtracting obstacles (number)
-  - surface_type: "asphalt" | "concrete" | "gravel" | "mixed" | "unknown"
-  - has_internal_curbs: true/false
-  - has_light_poles: true/false
-  - has_landscaping_islands: true/false
-  - obstacle_types: array of strings (e.g. ["light_poles","median_curbs","planters"])
-  - obstacle_density: "none" | "light" | "moderate" | "heavy"
-  - suitability_score: 0–100 (100 = ideal open asphalt, 0 = unusable)
-  - confidence: "high" | "medium" | "low"
-  - assessment_notes: 2–3 sentences explaining the score
-  ```
+#### 3D — Batch scoring on search results ✅
+- [x] All candidates scored in parallel: satellite fetch + Claude vision + highway score + reverse geocode run concurrently per candidate
+- [x] Results sorted: largest usable lot first, composite score as tiebreaker
+- [x] Loading state per card while scoring runs
 
-- [ ] Parse and store response in `venue_ai_assessments`; update `venues` with derived scores
-- [ ] If Claude returns `confidence: "low"` (image obstructed, lot partially visible, winter snow cover), flag the venue for manual review rather than surfacing a low score as authoritative
+#### 3E — Re-score and override ✅
+- [x] "Re-analyze" button on any venue — fetches fresh satellite image, re-runs Claude assessment
+- [x] Manual score override: pin a custom score (0–100) with a note; visually distinguished from AI score
+- [x] Score history: each assessment stored in `venue_ai_assessments`; organizer can view history
 
-#### 3C — Composite scoring
-- [ ] **AI score** (60% weight): `suitability_score` from vision analysis — captures what only a visual inspection can see
-- [ ] **Size score** (25% weight): `estimated_clear_acres` normalized against a target minimum (e.g. 4 acres = 100%)
-- [ ] **Access score** (15% weight): driving time in minutes to nearest highway interchange via Directions API; <5 min = 100, 20+ min = 0
-- [ ] Composite stored in `venues.composite_score`; recalculated whenever any component changes
-- [ ] Score breakdown visible in the detail panel: three labeled bars (AI assessment / Size / Access) + composite
+### Phase 4 — Owner Identification (partial)
+- [x] County assessor link helper: static link table by state (`lib/assessor-links.js`); surfaces direct link to parcel search from venue edit panel
+- [x] Manual entry form: owner name, email, phone, source
+- [x] Notes field for ownership complexity
+- [ ] **Auto-populate via paid parcel API** (ATTOM or Regrid): given a lat/lng or address, return owner name, mailing address, and entity type (LLC vs. individual) — eliminates the manual assessor lookup step for most properties
+- [ ] "Owner identified" status indicator on pipeline card when `owner_email` or `owner_phone` is present
 
-#### 3D — Batch scoring on search results
-- [ ] After a Places search returns N candidates, trigger background scoring jobs for all N in parallel (up to 10 concurrent to manage API cost)
-- [ ] List view shows a loading indicator per card while scoring runs; updates in place via polling or SSE
-- [ ] Scored results auto-sort by composite score descending; organizer can switch to distance sort
+### Phase 5 — AI Outreach Drafting ✅
+- [x] "Draft inquiry email" in pipeline drawer and venue edit panel
+- [x] Prompt includes: org name, event type, venue name + address, estimated lot size
+- [x] Claude Haiku generates 3-paragraph email: who we are / what the event involves / the ask
+- [x] Organizer edits subject and body before sending
+- [x] Sent via Resend; outreach record logged with `ai_drafted = TRUE`; venue auto-advanced to Contacted
+- [x] Draft records in Outreach tab have a Send button (no longer a dead end)
+- [ ] **Feed assessment notes into draft prompt**: include surface type, usable acres, lot type, and highway access time so the email references specific observed details ("Your 12-acre paved stadium overflow lot 2 minutes from I-75…")
+- [ ] **Follow-up template**: one-click "Send follow-up" on any overdue contacted venue — AI generates a shorter check-in email referencing the original outreach date
 
-#### 3E — Re-score and override
-- [ ] "Re-analyze" button on any venue — fetches a fresh satellite image and re-runs the Claude assessment (useful after seasonal changes or if confidence was low)
-- [ ] Manual override: organizer can pin a custom score (0–100) with a note; composite uses the manual score instead of AI score; override is visually distinguished ("Manual — overrides AI")
-- [ ] Score history: each assessment stored in `venue_ai_assessments` — organizer can see how the score changed across re-analyses
+### Phase 6 — Pipeline Management ✅
+- [x] Kanban board: 8 columns (candidate → shortlisted → contacted → responded → site visit → approved → declined → archived)
+- [x] Stage advancement buttons in drawer; decline requires category + freeform reason
+- [x] Follow-up overdue alert banner: contacted venues with no response after 7 days
+- [x] Response logging: "Mark response received" with notes; status advances to Responded
+- [x] Site visit checklist: actual acres, surface condition, perimeter, restrooms, electrical, security, nearest hospital, photo links
+- [x] Timeline page (`/admin/venues/[id]/timeline`): full chronological history of assessments, outreach, and notes; add notes inline
+- [x] Timeline linked from pipeline drawer and venue edit panel
+- [ ] **Inline notes from pipeline drawer**: add a note without navigating to the timeline page
+- [ ] **Drawer stays open on stage advance**: currently closes after advancing; should stay open and reflect the new status
+- [ ] **Drag-to-advance**: drag kanban cards between columns as an alternative to the advance button
 
-### Phase 4 — Owner Identification
-- [ ] Auto-populate from Google Places: `formatted_phone_number`, `website`
-- [ ] County assessor link helper: for a given address, surface a direct link to that county's public parcel search (static link table by county FIPS — no scraping)
-- [ ] Manual override form: owner name, email, phone, how identified
-- [ ] "Owner identified" status badge on venue card
-- [ ] Notes field for ownership complexity ("Lot owned by LLC, managed by CBRE Atlanta — call regional leasing desk")
-
-### Phase 5 — AI Outreach Drafting
-- [ ] "Draft inquiry" button on any venue with owner email populated
-- [ ] Prompt to Claude includes: org name, event type, event description (from org profile), venue name + address, estimated lot size, target event date range (if set)
-- [ ] Claude generates a 3-paragraph email:
-  1. Who we are + what the program does (safety focus, nonprofit backing if applicable)
-  2. What the event involves (one day, N vehicles, full cleanup, no property modifications, certificate of insurance provided)
-  3. The ask: would you be open to a brief conversation about hosting?
-- [ ] Organizer edits before sending; character-counted preview
-- [ ] Sent via Resend from the platform; outreach record logged with `ai_drafted = TRUE`
-- [ ] Subject line also AI-generated with manual override
-
-### Phase 6 — Pipeline Management
-- [ ] Kanban-style pipeline view: one column per status stage; drag cards to advance
-- [ ] Follow-up reminders: banner surfaces any `contacted` venue with no response after 7 days
-- [ ] Response logging: "Mark response received" button + outcome notes; status auto-advances to `responded`
-- [ ] Decline reason required when moving to `declined` (freeform + category: "No interest", "Insurance liability", "Capacity conflict", "Cost prohibitive", "No response after 3 attempts")
-- [ ] Site visit checklist triggered on move to `site_visit`:
-  - Actual usable acres (measured, not estimated)
-  - Surface condition (1–5)
-  - Perimeter description (fence, open, curb)
-  - Restroom facilities on-site
-  - Electrical access
-  - Security / overnight storage available
-  - Nearest hospital (for event safety planning)
-  - Photos attached (links or uploads)
-
-### Phase 7 — Institutional Memory & Multi-Org
-- [ ] Approved venue library: all `approved` venues searchable by state/city/region, shared org-wide
-- [ ] Declined venues visible with reasons — warns with a banner if another organizer attempts to contact the same `google_place_id`
-- [ ] Full venue timeline: all status changes, outreach attempts, and notes in chronological order
-- [ ] Cross-org sharing: program admin can mark venues "nationally approved" — visible to all orgs in the program
-- [ ] Export: approved venues as JSON for import into event management platforms (e.g., arscca-VMS)
+### Phase 7 — Institutional Memory (partial)
+- [x] Approved venue library (`/admin/library`): all `approved` venues, filterable by state, searchable by name
+- [x] Full venue timeline with notes, outreach, and assessment history
+- [x] Export: approved venues as JSON via `/api/admin/library?export=1`
+- [ ] **Declined venue warning**: when adding a search result to the pipeline, check if the `google_place_id` is already in `venues` with status `declined`; surface the decline reason and require confirmation to re-add
+- [ ] **Cross-org sharing**: program admin can mark venues "nationally approved" — visible to all orgs
 
 ### Phase 8 — arscca-VMS Integration
-- [ ] VMS event creation form: "Select from approved venues" dropdown replaces free-text location field
+- [ ] VMS event creation form: "Select from approved venues" dropdown pre-populated via `/api/v1/approved-venues`
 - [ ] Venue record pre-fills event: address, city, state, lot size, owner contact, site visit notes
-- [ ] Implementation path: shared Neon DB (simpler for single-program use) or lightweight REST API (cleaner if VenueScout serves multiple orgs independently)
+- [ ] API key auth on the v1 endpoint (`VENUESCOUT_API_KEY` env var)
+
+### Phase 9 — Search Quality
+- [ ] **Google Places fallback**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest` — catches lots that exist in Google's index but have no OSM polygon (common for newer developments and private lots)
+- [ ] **Sort by usable acres**: when Claude returned a `usable_acres` value, use it as the primary sort key instead of OSM polygon area, which often over- or under-counts
+- [ ] **Composite score recalculation on manual edit**: when an organizer edits `estimated_acres` in the venue form, recompute the size component of `composite_score` automatically
+- [ ] **"Needs revisit" flag**: mark a venue for re-analysis with a reason (e.g., "winter image — re-check in spring", "construction in progress") without changing its pipeline status
+- [ ] **Bulk add to pipeline**: checkbox-select multiple search results and add them all in one action
+
+### Phase 10 — Multi-Org & SaaS
+- [ ] Google OAuth sign-in (easier onboarding than credentials-only)
+- [ ] Per-org branding: event type label, program name, outreach email signature
+- [ ] Billing / usage limits: per-org monthly cap on Claude vision calls and Resend sends
+- [ ] Org isolation: venues, outreach records, and users are fully scoped to `org_id`; no cross-org data leakage
 
 ---
 
