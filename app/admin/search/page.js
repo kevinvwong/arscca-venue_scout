@@ -237,6 +237,33 @@ export default function SearchPage() {
     const displayName = getLotDisplayName(selectedPlace);
 
     try {
+      // Warn if this place was previously declined
+      try {
+        const checkRes = await fetch(
+          `/api/admin/search/check-declined?place_id=${encodeURIComponent(selectedPlace.osmId)}`
+        );
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.declined) {
+            const reasonLine = checkData.reason
+              ? `Reason: ${checkData.reason}`
+              : "No reason recorded.";
+            const dateLine = checkData.declined_at
+              ? `Declined on ${new Date(checkData.declined_at).toLocaleDateString()}.`
+              : "";
+            const confirmed = window.confirm(
+              `This venue was previously declined.\n\n${dateLine}\n${reasonLine}\n\nRe-add anyway?`
+            );
+            if (!confirmed) {
+              setAddingToDb(false);
+              return;
+            }
+          }
+        }
+      } catch {
+        // If the check fails, fall through and let the POST surface any real error
+      }
+
       const res = await fetch("/api/admin/venues", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -328,6 +355,7 @@ export default function SearchPage() {
 
   const alreadyAdded = selectedPlace && addedOsmIds.has(selectedPlace.osmId);
   const alreadyInDb  = selectedPlace && selectedPlace.existingStatus != null;
+  const previouslyDeclined = selectedPlace && DECLINED_STATUSES.has(selectedPlace.existingStatus);
 
   return (
     <>
@@ -663,6 +691,17 @@ export default function SearchPage() {
             <div className="px-4 pb-5 shrink-0">
               {alreadyAdded ? (
                 <p className="text-sm font-medium text-teal-600">Added to pipeline</p>
+              ) : previouslyDeclined ? (
+                <button
+                  className="btn btn-primary w-full flex items-center justify-center gap-2"
+                  onClick={handleAddToPipeline}
+                  disabled={addingToDb}
+                >
+                  {addingToDb && (
+                    <span className="w-5 h-5 border-2 border-teal-200 border-t-teal-500 rounded-full animate-spin" />
+                  )}
+                  Re-add to pipeline
+                </button>
               ) : alreadyInDb ? (
                 <p className="text-sm text-gray-500 italic">Already in pipeline</p>
               ) : (

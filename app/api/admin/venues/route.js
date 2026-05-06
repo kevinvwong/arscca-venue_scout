@@ -105,6 +105,25 @@ export async function POST(req) {
   const VALID_SOURCES = ["google_places", "osm", "manual"];
   const source = VALID_SOURCES.includes(bodySource) ? bodySource : "manual";
 
+  // If a venue with this google_place_id already exists and was previously
+  // declined/archived, revive it instead of inserting (would violate the
+  // unique index on google_place_id).
+  if (google_place_id) {
+    const existing = await sql`
+      SELECT id, status FROM venues WHERE google_place_id = ${google_place_id} LIMIT 1
+    `;
+    const prior = existing.rows[0];
+    if (prior && (prior.status === "declined" || prior.status === "archived")) {
+      const revived = await sql`
+        UPDATE venues
+        SET status = ${status}, updated_at = NOW()
+        WHERE id = ${prior.id}
+        RETURNING *
+      `;
+      return NextResponse.json({ venue: revived.rows[0] }, { status: 200 });
+    }
+  }
+
   const result = await sql`
     INSERT INTO venues (
       name, address, city, state, zip, lat, lng,
