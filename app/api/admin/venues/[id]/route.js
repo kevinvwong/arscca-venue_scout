@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql, initDb } from "@/lib/db";
 import { requireAdmin } from "@/lib/require-admin";
+import { recomputeComposite } from "@/lib/score-venue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +34,52 @@ export async function PATCH(req, { params }) {
 
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: "No valid fields to update." }, { status: 400 });
+  }
+
+  // If estimated_acres is changing, recompute composite_score using the
+  // canonical 50/35/15 weighting from lib/score-venue.js. Pull the latest
+  // AI score from the most recent assessment, and the existing highway
+  // score from the venue row itself.
+  if (Object.prototype.hasOwnProperty.call(updates, "estimated_acres")) {
+    const rawAcres = updates.estimated_acres;
+    const newAcres =
+      rawAcres === "" || rawAcres === null || rawAcres === undefined
+        ? null
+        : Number(rawAcres);
+
+    const { rows: currentRows } = await sql`
+      SELECT v.estimated_acres, v.highway_access_score,
+             (SELECT a.suitability_score
+                FROM venue_ai_assessments a
+               WHERE a.venue_id = v.id
+            ORDER BY a.assessed_at DESC
+               LIMIT 1) AS ai_score
+        FROM venues v
+       WHERE v.id = ${id}
+    `;
+
+    if (!currentRows.length) {
+      return NextResponse.json({ error: "Venue not found." }, { status: 404 });
+    }
+
+    const current = currentRows[0];
+    const acresChanged =
+      Number(current.estimated_acres ?? NaN) !== Number(newAcres ?? NaN) &&
+      !(current.estimated_acres == null && newAcres == null);
+
+    // Only recompute if the acreage actually changed and we have an AI
+    // score to combine with — otherwise we'd just overwrite a valid
+    // composite with null, or burn cycles for a no-op.
+    if (acresChanged && current.ai_score !== null && current.ai_score !== undefined) {
+      const newComposite = recomputeComposite({
+        acres: newAcres,
+        aiScore: current.ai_score,
+        highwayScore: current.highway_access_score,
+      });
+      if (newComposite !== null) {
+        updates.composite_score = newComposite;
+      }
+    }
   }
 
   const setClauses = Object.keys(updates).map((k, i) => `${k} = $${i + 2}`).join(", ");
