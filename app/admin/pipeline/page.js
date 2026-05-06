@@ -32,6 +32,13 @@ const SURFACE_OPTIONS = [
   { value: "5", label: "5 — Excellent" },
 ];
 
+const NOTE_TYPES = [
+  { value: "general",        label: "General" },
+  { value: "site_visit",     label: "Site visit" },
+  { value: "owner_contact",  label: "Owner contact" },
+  { value: "decline_reason", label: "Decline reason" },
+];
+
 const EMPTY_SITE_VISIT = {
   actualAcres: "",
   surfaceCondition: "",
@@ -94,6 +101,7 @@ function StatusBadge({ status }) {
 function KanbanCard({ venue, onClick }) {
   const pastDue = isPastDue(venue.follow_up_due_at);
   const lastOutreach = venue.last_outreach_at ? relativeTime(venue.last_outreach_at) : null;
+  const ownerIdentified = Boolean(venue.owner_email || venue.owner_phone);
 
   return (
     <button
@@ -118,6 +126,14 @@ function KanbanCard({ venue, onClick }) {
       )}
 
       <div className="flex items-center gap-1.5 flex-wrap">
+        {ownerIdentified && (
+          <span
+            className="inline-flex items-center rounded-full bg-green-50 text-green-700 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+            title="Owner contact info on file"
+          >
+            Owner ✓
+          </span>
+        )}
         {lastOutreach && (
           <span className="text-[10px] text-gray-400">Contacted {lastOutreach}</span>
         )}
@@ -179,8 +195,59 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
   const [sending,         setSending]         = useState(false);
   const [emailSent,       setEmailSent]       = useState(false);
 
+  // Notes state
+  const [notes,           setNotes]           = useState([]);
+  const [notesLoading,    setNotesLoading]    = useState(false);
+  const [notesError,      setNotesError]      = useState(null);
+  const [noteBody,        setNoteBody]        = useState("");
+  const [noteType,        setNoteType]        = useState("general");
+  const [savingNote,      setSavingNote]      = useState(false);
+
   const status = venue.status;
   const pastDue = isPastDue(venue.follow_up_due_at);
+
+  // Load notes when the venue changes
+  useEffect(() => {
+    let cancelled = false;
+    async function loadNotes() {
+      setNotesLoading(true);
+      setNotesError(null);
+      try {
+        const res  = await fetch(`/api/admin/venues/${venue.id}/notes`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to load notes.");
+        if (!cancelled) setNotes(json.notes ?? []);
+      } catch (e) {
+        if (!cancelled) setNotesError(e.message);
+      } finally {
+        if (!cancelled) setNotesLoading(false);
+      }
+    }
+    loadNotes();
+    return () => { cancelled = true; };
+  }, [venue.id]);
+
+  async function submitNote() {
+    if (!noteBody.trim() || savingNote) return;
+    setSavingNote(true);
+    setNotesError(null);
+    try {
+      const res  = await fetch(`/api/admin/venues/${venue.id}/notes`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ body: noteBody.trim(), note_type: noteType }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to save note.");
+      setNotes((prev) => [json.note, ...prev]);
+      setNoteBody("");
+      setNoteType("general");
+    } catch (e) {
+      setNotesError(e.message);
+    } finally {
+      setSavingNote(false);
+    }
+  }
 
   async function draftEmail() {
     setDrafting(true);
@@ -691,6 +758,66 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
             </div>
           )}
 
+          {/* Notes */}
+          <div>
+            <p className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle mb-2">Notes</p>
+
+            <div className="space-y-2 mb-3">
+              <textarea
+                className="input text-sm resize-none"
+                rows={3}
+                placeholder="Add a note…"
+                value={noteBody}
+                onChange={(e) => setNoteBody(e.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <select
+                  className="input text-sm flex-1"
+                  value={noteType}
+                  onChange={(e) => setNoteType(e.target.value)}
+                >
+                  {NOTE_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={submitNote}
+                  disabled={savingNote || !noteBody.trim()}
+                  className="btn btn-primary text-sm"
+                >
+                  {savingNote ? <><Spinner /> Saving…</> : "Add note"}
+                </button>
+              </div>
+              {notesError && (
+                <div className="notice-error text-sm" role="alert">{notesError}</div>
+              )}
+            </div>
+
+            {notesLoading ? (
+              <p className="text-xs text-gray-400">Loading notes…</p>
+            ) : notes.length === 0 ? (
+              <p className="text-xs text-gray-400">No notes yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {notes.map((n) => (
+                  <li key={n.id} className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
+                        {n.note_type ? n.note_type.replace(/_/g, " ") : "general"}
+                      </span>
+                      {n.created_at && (
+                        <span className="text-[10px] text-gray-400 tabular-nums">
+                          {relativeTime(n.created_at)}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-700 whitespace-pre-wrap">{n.body}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           {/* Links */}
           <div className="flex flex-wrap gap-4">
             <a
@@ -742,8 +869,10 @@ export default function PipelinePage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load pipeline.");
       setData(json);
+      return json;
     } catch (e) {
       setError(e.message);
+      return null;
     } finally {
       setLoading(false);
     }
@@ -763,9 +892,20 @@ export default function PipelinePage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Advance failed.");
-      await load();
-      // Update the selected venue with the returned row (or find it in refreshed data)
-      setSelectedVenue(json.venue ?? null);
+
+      // Reload pipeline data, then keep the drawer open by re-selecting the
+      // updated venue. Prefer the fresh list row (it includes computed fields
+      // like last_outreach_at / follow_up_due_at); fall back to the API row,
+      // and finally to the previous selection merged with the new status so
+      // the drawer never closes on success.
+      const refreshed = await load();
+      const id = selectedVenue.id;
+      const fromList = refreshed?.columns
+        ? Object.values(refreshed.columns).flat().find((v) => v.id === id)
+        : null;
+      setSelectedVenue(
+        fromList ?? json.venue ?? { ...selectedVenue, status }
+      );
     } catch (e) {
       setAdvanceError(e.message);
     } finally {
