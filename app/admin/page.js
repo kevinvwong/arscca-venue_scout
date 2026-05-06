@@ -937,6 +937,15 @@ export default function VenuesPage() {
                 <button onClick={closeEdit} className="btn-outline">Cancel</button>
               </div>
 
+              <div className="pt-2">
+                <a
+                  href={`/admin/venues/${selected?.id}/timeline`}
+                  className="text-xs text-brand-600 hover:underline font-medium"
+                >
+                  View full timeline ↗
+                </a>
+              </div>
+
               <div className="pt-4 border-t border-gray-100">
                 {deleteConfirm ? (
                   <div className="flex gap-2 items-center">

@@ -691,19 +691,25 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
             </div>
           )}
 
-          {/* Google Maps link */}
-          {mapsUrl && (
-            <div>
+          {/* Links */}
+          <div className="flex flex-wrap gap-4">
+            <a
+              href={`/admin/venues/${venue.id}/timeline`}
+              className="text-xs text-brand-600 hover:underline font-medium"
+            >
+              View full timeline ↗
+            </a>
+            {mapsUrl && (
               <a
                 href={mapsUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-brand-600 hover:underline font-medium"
               >
-                View on Google Maps ↗
+                Google Maps ↗
               </a>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </>
