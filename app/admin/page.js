@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useSession } from "next-auth/react";
 import { getAssessorUrl, hasAssessorLink } from "@/lib/assessor-links";
 
 const STATUSES = [
@@ -46,6 +47,13 @@ function ScorePill({ score }) {
 }
 
 export default function VenuesPage() {
+  const { data: session } = useSession();
+  // Mirrors lib/require-admin: program admin if either flag is set on the
+  // session (DB role='admin' or ADMIN_EMAILS env). Org-level roles do NOT
+  // get to flip the nationally_approved toggle.
+  const isProgramAdmin =
+    session?.user?.isAdmin === true || session?.user?.role === "admin";
+
   const [venues, setVenues]             = useState([]);
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState("");
@@ -721,6 +729,30 @@ export default function VenuesPage() {
                   {STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
                 </select>
               </Field>
+
+              {/* Nationally approved — visible only to program admins. */}
+              {isProgramAdmin && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      checked={!!editForm.nationally_approved}
+                      onChange={(e) => setEditForm((f) => ({
+                        ...f,
+                        nationally_approved: e.target.checked,
+                      }))}
+                    />
+                    <span className="text-sm font-medium text-gray-800">
+                      Nationally approved
+                    </span>
+                  </label>
+                  <p className="text-xs text-ink-subtle mt-1 ml-6">
+                    When checked, this venue is visible in the library to all
+                    orgs (must also be in <code>approved</code> status).
+                  </p>
+                </div>
+              )}
 
               {/* Needs-revisit flag — orthogonal to pipeline status. */}
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">

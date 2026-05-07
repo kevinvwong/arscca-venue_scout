@@ -156,6 +156,7 @@ export default function LibraryPage() {
   const [error,      setError]      = useState(null);
   const [search,     setSearch]     = useState("");
   const [filterState, setFilterState] = useState("");
+  const [nationalOnly, setNationalOnly] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
 
   const load = useCallback(async () => {
@@ -163,8 +164,9 @@ export default function LibraryPage() {
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (search)      params.set("q", search);
-      if (filterState) params.set("state", filterState);
+      if (search)       params.set("q", search);
+      if (filterState)  params.set("state", filterState);
+      if (nationalOnly) params.set("national_only", "1");
       const res  = await fetch(`/api/admin/library?${params}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load library.");
@@ -174,7 +176,7 @@ export default function LibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, filterState]);
+  }, [search, filterState, nationalOnly]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -184,8 +186,9 @@ export default function LibraryPage() {
 
   function exportAll() {
     const params = new URLSearchParams();
-    if (search)      params.set("q", search);
-    if (filterState) params.set("state", filterState);
+    if (search)       params.set("q", search);
+    if (filterState)  params.set("state", filterState);
+    if (nationalOnly) params.set("national_only", "1");
     params.set("export", "1");
     window.location.href = `/api/admin/library?${params}`;
   }
@@ -211,7 +214,7 @@ export default function LibraryPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-6">
+      <div className="flex flex-wrap items-center gap-3 mb-6">
         <input
           type="search"
           placeholder="Search venues…"
@@ -229,10 +232,19 @@ export default function LibraryPage() {
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
-        {(search || filterState) && (
+        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+            checked={nationalOnly}
+            onChange={(e) => setNationalOnly(e.target.checked)}
+          />
+          Show only nationally approved
+        </label>
+        {(search || filterState || nationalOnly) && (
           <button
             className="btn btn-outline text-xs"
-            onClick={() => { setSearch(""); setFilterState(""); }}
+            onClick={() => { setSearch(""); setFilterState(""); setNationalOnly(false); }}
           >
             Clear filters
           </button>
@@ -278,7 +290,17 @@ export default function LibraryPage() {
                     className="hover:bg-gray-50 cursor-pointer"
                   >
                     <Td>
-                      <div className="font-medium text-gray-900">{v.name}</div>
+                      <div className="font-medium text-gray-900 flex items-center gap-2">
+                        <span>{v.name}</span>
+                        {v.is_national && (
+                          <span
+                            title="Nationally approved — visible to all orgs"
+                            className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold text-indigo-800 bg-indigo-50 border border-indigo-200"
+                          >
+                            National
+                          </span>
+                        )}
+                      </div>
                       {v.address && (
                         <div className="text-xs text-ink-subtle truncate max-w-[180px]">
                           {v.address}

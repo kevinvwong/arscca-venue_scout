@@ -5,12 +5,92 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/require-admin";
 import { initDb, sql } from "@/lib/db";
 
-async function fetchApprovedVenues({ state, q }) {
+async function fetchApprovedVenues({ state, q, nationalOnly }) {
+  // Cross-org sharing: a venue is visible in the library if it's approved
+  // AND (belongs to the caller's org OR is flagged nationally_approved).
+  // The library route was already global (no org scoping), so the practical
+  // change here is to surface the `is_national` flag for the UI badge and
+  // to support a "national only" filter mode.
+  if (nationalOnly) {
+    if (state && q) {
+      const like = `%${q}%`;
+      return (
+        await sql`
+          SELECT v.*,
+            v.nationally_approved AS is_national,
+            (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
+            (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
+            (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
+            (SELECT suitability_score FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS ai_score,
+            (SELECT assessment_notes FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS assessment_notes
+          FROM venues v
+          WHERE v.status = 'approved'
+            AND v.nationally_approved = TRUE
+            AND v.state = ${state}
+            AND (v.name ILIKE ${like} OR v.city ILIKE ${like} OR v.address ILIKE ${like})
+          ORDER BY v.composite_score DESC NULLS LAST, v.name ASC
+        `
+      ).rows;
+    } else if (state) {
+      return (
+        await sql`
+          SELECT v.*,
+            v.nationally_approved AS is_national,
+            (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
+            (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
+            (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
+            (SELECT suitability_score FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS ai_score,
+            (SELECT assessment_notes FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS assessment_notes
+          FROM venues v
+          WHERE v.status = 'approved'
+            AND v.nationally_approved = TRUE
+            AND v.state = ${state}
+          ORDER BY v.composite_score DESC NULLS LAST, v.name ASC
+        `
+      ).rows;
+    } else if (q) {
+      const like = `%${q}%`;
+      return (
+        await sql`
+          SELECT v.*,
+            v.nationally_approved AS is_national,
+            (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
+            (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
+            (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
+            (SELECT suitability_score FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS ai_score,
+            (SELECT assessment_notes FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS assessment_notes
+          FROM venues v
+          WHERE v.status = 'approved'
+            AND v.nationally_approved = TRUE
+            AND (v.name ILIKE ${like} OR v.city ILIKE ${like} OR v.address ILIKE ${like})
+          ORDER BY v.composite_score DESC NULLS LAST, v.name ASC
+        `
+      ).rows;
+    } else {
+      return (
+        await sql`
+          SELECT v.*,
+            v.nationally_approved AS is_national,
+            (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
+            (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
+            (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
+            (SELECT suitability_score FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS ai_score,
+            (SELECT assessment_notes FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS assessment_notes
+          FROM venues v
+          WHERE v.status = 'approved'
+            AND v.nationally_approved = TRUE
+          ORDER BY v.composite_score DESC NULLS LAST, v.name ASC
+        `
+      ).rows;
+    }
+  }
+
   if (state && q) {
     const like = `%${q}%`;
     return (
       await sql`
         SELECT v.*,
+          v.nationally_approved AS is_national,
           (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
           (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
           (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
@@ -27,6 +107,7 @@ async function fetchApprovedVenues({ state, q }) {
     return (
       await sql`
         SELECT v.*,
+          v.nationally_approved AS is_national,
           (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
           (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
           (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
@@ -43,6 +124,7 @@ async function fetchApprovedVenues({ state, q }) {
     return (
       await sql`
         SELECT v.*,
+          v.nationally_approved AS is_national,
           (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
           (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
           (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
@@ -58,6 +140,7 @@ async function fetchApprovedVenues({ state, q }) {
     return (
       await sql`
         SELECT v.*,
+          v.nationally_approved AS is_national,
           (SELECT COUNT(*) FROM venue_outreach WHERE venue_id = v.id)::int AS outreach_count,
           (SELECT COUNT(*) FROM venue_notes WHERE venue_id = v.id)::int AS notes_count,
           (SELECT assessed_at FROM venue_ai_assessments WHERE venue_id = v.id ORDER BY assessed_at DESC LIMIT 1) AS last_assessed_at,
@@ -78,11 +161,12 @@ export async function GET(req) {
   await initDb();
 
   const { searchParams } = new URL(req.url);
-  const state     = searchParams.get("state")?.trim() || null;
-  const q         = searchParams.get("q")?.trim()     || null;
-  const doExport  = searchParams.get("export") === "1";
+  const state        = searchParams.get("state")?.trim() || null;
+  const q            = searchParams.get("q")?.trim()     || null;
+  const doExport     = searchParams.get("export") === "1";
+  const nationalOnly = searchParams.get("national_only") === "1";
 
-  const rows = await fetchApprovedVenues({ state, q });
+  const rows = await fetchApprovedVenues({ state, q, nationalOnly });
 
   if (doExport) {
     const payload = {

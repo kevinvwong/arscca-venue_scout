@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { sql, initDb } from "@/lib/db";
 import { requireAdmin } from "@/lib/require-admin";
 import { recomputeComposite } from "@/lib/score-venue";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,11 +29,26 @@ export async function PATCH(req, { params }) {
     "obstacle_score","highway_access_score","composite_score",
     "custom_score","custom_score_note",
     "needs_revisit","revisit_reason",
+    "nationally_approved",
   ];
 
   const updates = Object.fromEntries(
     Object.entries(body).filter(([k]) => ALLOWED.includes(k))
   );
+
+  // `nationally_approved` is admin-only. Silently strip it from the update
+  // when the caller's role isn't admin so other patched fields still apply.
+  if (Object.prototype.hasOwnProperty.call(updates, "nationally_approved")) {
+    const session = await getServerSession(authOptions);
+    const isProgramAdmin =
+      session?.user?.role === "admin" || session?.user?.isAdmin === true;
+    if (!isProgramAdmin) {
+      delete updates.nationally_approved;
+    } else {
+      const flag = updates.nationally_approved;
+      updates.nationally_approved = flag === true || flag === "true";
+    }
+  }
 
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: "No valid fields to update." }, { status: 400 });
