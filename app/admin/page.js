@@ -454,7 +454,17 @@ export default function VenuesPage() {
               {venues.map((v) => (
                 <tr key={v.id} className="hover:bg-gray-50">
                   <Td>
-                    <div className="font-medium text-gray-900">{v.name}</div>
+                    <div className="font-medium text-gray-900 flex items-center gap-2">
+                      <span>{v.name}</span>
+                      {v.needs_revisit && (
+                        <span
+                          title={v.revisit_reason || "Needs revisit"}
+                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200"
+                        >
+                          ⟳ revisit
+                        </span>
+                      )}
+                    </div>
                     {v.address && (
                       <div className="text-xs text-ink-subtle truncate max-w-[200px]">{v.address}</div>
                     )}
@@ -711,6 +721,39 @@ export default function VenuesPage() {
                   {STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
                 </select>
               </Field>
+
+              {/* Needs-revisit flag — orthogonal to pipeline status. */}
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                    checked={!!editForm.needs_revisit}
+                    onChange={(e) => setEditForm((f) => ({
+                      ...f,
+                      needs_revisit: e.target.checked,
+                      revisit_reason: e.target.checked ? (f.revisit_reason || "") : "",
+                    }))}
+                  />
+                  <span className="text-sm font-medium text-gray-800">⟳ Needs revisit</span>
+                </label>
+                {editForm.needs_revisit && (
+                  <div>
+                    <label className="label">Reason <span className="text-red-600">*</span></label>
+                    <textarea
+                      rows={2}
+                      required
+                      className="input resize-none w-full text-sm"
+                      placeholder='e.g., "winter image — re-check in spring"'
+                      value={editForm.revisit_reason || ""}
+                      onChange={(e) => setEditForm((f) => ({ ...f, revisit_reason: e.target.value }))}
+                    />
+                    <p className="text-xs text-ink-subtle mt-1">
+                      Pipeline status is unchanged.
+                    </p>
+                  </div>
+                )}
+              </div>
 
               <Field label="Name">
                 <input

@@ -26,6 +26,7 @@ export async function PATCH(req, { params }) {
     "owner_name","owner_email","owner_phone","owner_source",
     "obstacle_score","highway_access_score","composite_score",
     "custom_score","custom_score_note",
+    "needs_revisit","revisit_reason",
   ];
 
   const updates = Object.fromEntries(
@@ -34,6 +35,39 @@ export async function PATCH(req, { params }) {
 
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: "No valid fields to update." }, { status: 400 });
+  }
+
+  // Needs-revisit flag: orthogonal to pipeline status. Do NOT mutate `status`
+  // here. If the flag is being set true, a non-empty (after-trim) reason is
+  // required. If the flag is being set false, clear the reason to NULL so a
+  // stale reason can't linger on a venue that no longer needs a revisit.
+  if (Object.prototype.hasOwnProperty.call(updates, "needs_revisit")) {
+    const flag = updates.needs_revisit;
+    const boolFlag = flag === true || flag === "true";
+    updates.needs_revisit = boolFlag;
+
+    if (boolFlag) {
+      const rawReason =
+        Object.prototype.hasOwnProperty.call(updates, "revisit_reason")
+          ? updates.revisit_reason
+          : undefined;
+      const trimmed = typeof rawReason === "string" ? rawReason.trim() : "";
+      if (!trimmed) {
+        return NextResponse.json(
+          { error: "A reason is required when marking a venue as needs revisit." },
+          { status: 400 }
+        );
+      }
+      updates.revisit_reason = trimmed;
+    } else {
+      updates.revisit_reason = null;
+    }
+  } else if (Object.prototype.hasOwnProperty.call(updates, "revisit_reason")) {
+    // Reason being updated without toggling the flag — trim, and treat
+    // empty/whitespace as NULL.
+    const r = updates.revisit_reason;
+    const trimmed = typeof r === "string" ? r.trim() : "";
+    updates.revisit_reason = trimmed ? trimmed : null;
   }
 
   // If estimated_acres is changing, recompute composite_score using the
