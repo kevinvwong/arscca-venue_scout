@@ -5,7 +5,8 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/require-admin";
 import { initDb, sql } from "@/lib/db";
 import Anthropic from "@anthropic-ai/sdk";
-import { queryOsmLots } from "@/lib/osm-search";
+import { queryOsmLots, findPolygonAt } from "@/lib/osm-search";
+import { searchPlaces } from "@/lib/places-fallback";
 import { getHighwayScore } from "@/lib/highway-score";
 import { buildScoutPrompt, parseScoutResponse } from "@/lib/scout-prompt";
 
@@ -56,6 +57,99 @@ async function scoreWithClaude(anthropic, { lat, lng, name, osmAcres, imageBase6
   }
 }
 
+// Haversine-ish meter distance, sufficient for our small-radius dedup checks.
+function meterDistance(aLat, aLng, bLat, bLng) {
+  const dLat = (bLat - aLat) * 111320;
+  const dLng = (bLng - aLng) * 111320 * Math.cos((aLat * Math.PI) / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+// Run N async tasks with a concurrency cap. Preserves input order.
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await worker(items[i], i);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Run the Google Places fallback for a search. Returns a list of OSM-shaped
+ * candidates (compatible with the rest of the scoring pipeline) sourced from
+ * Places hits whose reverse-OSM polygon lookup succeeded. De-dupes against
+ * `osmCandidates` by both osmId and 100m proximity.
+ */
+async function runPlacesFallback({ lat, lng, radiusMeters, osmCandidates }) {
+  let placesHits = [];
+  try {
+    placesHits = await searchPlaces({ lat, lng, radiusMeters });
+  } catch (err) {
+    console.warn("[search] Places fallback fetch failed:", err.message);
+    placesHits = [];
+  }
+
+  // Filter out Places hits already covered by an OSM candidate (within 100m).
+  const uncovered = placesHits.filter((hit) => {
+    return !osmCandidates.some(
+      (c) => meterDistance(c.lat, c.lng, hit.lat, hit.lng) < 100
+    );
+  });
+
+  // Per-call timeout in findPolygonAt prevents one bad lookup from stalling
+  // the whole search; concurrency cap of 8 keeps us under Overpass rate limits.
+  const polygonResults = await mapWithConcurrency(uncovered, 8, async (hit) => {
+    try {
+      const poly = await findPolygonAt({ lat: hit.lat, lng: hit.lng });
+      return poly ? { hit, poly } : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Build OSM-shaped candidates, deduping by osmId and by 100m proximity to
+  // both existing OSM candidates and to other Places-derived ones (two
+  // different POIs may resolve to the same enclosing polygon).
+  const out = [];
+  const seenOsmIds = new Set(osmCandidates.map((c) => c.osmId));
+
+  for (const r of polygonResults) {
+    if (!r) continue;
+    const { hit, poly } = r;
+    if (seenOsmIds.has(poly.osmId)) continue;
+
+    const dupNearby =
+      osmCandidates.some((c) => meterDistance(c.lat, c.lng, poly.lat, poly.lng) < 100) ||
+      out.some((c) => meterDistance(c.lat, c.lng, poly.lat, poly.lng) < 100);
+    if (dupNearby) continue;
+
+    seenOsmIds.add(poly.osmId);
+    out.push({
+      ...poly,
+      // Prefer the human-friendly Google name when OSM has none.
+      name: poly.name || hit.name,
+      source: "places+osm",
+      googlePlaceId: hit.place_id,
+      googleTypes: hit.types,
+    });
+  }
+
+  // Per-search telemetry — one line, no PII, no API keys.
+  console.log(
+    `[search] osm_count=${osmCandidates.length} ` +
+      `places_count=${placesHits.length} ` +
+      `places_kept_after_polygon_check=${out.length} ` +
+      `places_dropped=${placesHits.length - out.length}`
+  );
+
+  return out;
+}
+
 function lotScoreFromAcres(acres) {
   if (!acres || acres <= 0) return 0;
   if (acres < 2)  return 15;
@@ -97,11 +191,25 @@ export async function GET(req) {
     return NextResponse.json({ error: `Area scan failed: ${err.message}` }, { status: 502 });
   }
 
-  if (osmCandidates.length === 0) {
+  // 1b. Google Places fallback — catches "OSM has the polygon but with the
+  // wrong tag" cases. Each Places hit is reverse-queried against OSM for an
+  // overlapping polygon and only kept if a polygon meeting the size floor
+  // exists. Failures are logged and silently skipped so the request still
+  // returns OSM-only results.
+  const placesCandidates = await runPlacesFallback({
+    lat,
+    lng,
+    radiusMeters,
+    osmCandidates,
+  });
+
+  const combined = [...osmCandidates, ...placesCandidates];
+
+  if (combined.length === 0) {
     return NextResponse.json({ places: [] });
   }
 
-  const toScore = osmCandidates.slice(0, MAX_TO_SCORE);
+  const toScore = combined.slice(0, MAX_TO_SCORE);
 
   const anthropic = process.env.ANTHROPIC_API_KEY
     ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -152,6 +260,9 @@ export async function GET(req) {
         ownerEmail:           candidate.ownerEmail,
         ownerWebsite:         candidate.ownerWebsite,
         tags:                 candidate.tags,
+        source:               candidate.source         ?? "osm",
+        googlePlaceId:        candidate.googlePlaceId  ?? null,
+        googleTypes:          candidate.googleTypes    ?? null,
         // Acreage
         estimatedAcres,
         usableAcres,
