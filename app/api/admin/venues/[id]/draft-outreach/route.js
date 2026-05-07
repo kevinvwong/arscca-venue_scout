@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { requireAdmin } from "@/lib/require-admin";
 import { initDb, sql } from "@/lib/db";
+import { buildDraftPrompt } from "@/lib/draft-prompt";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,9 +18,10 @@ export async function POST(req, { params }) {
 
   await initDb();
 
-  // Fetch venue
+  // Fetch venue (includes highway_access_score from Phase 3C)
   const venueResult = await sql`
-    SELECT name, address, city, state, estimated_acres, lot_type, owner_name
+    SELECT name, address, city, state, estimated_acres, lot_type, owner_name,
+           highway_access_score
     FROM venues
     WHERE id = ${id}
   `;
@@ -28,9 +30,10 @@ export async function POST(req, { params }) {
     return NextResponse.json({ error: "Venue not found." }, { status: 404 });
   }
 
-  // Fetch latest AI assessment
+  // Fetch latest AI assessment — surface details used to personalise the email.
   const assessmentResult = await sql`
-    SELECT estimated_total_acres, suitability_score, assessment_notes
+    SELECT estimated_total_acres, estimated_clear_acres, surface_type,
+           obstacle_density, suitability_score, confidence, assessment_notes
     FROM venue_ai_assessments
     WHERE venue_id = ${id}
     ORDER BY assessed_at DESC
@@ -52,36 +55,14 @@ export async function POST(req, { params }) {
   const eventDate = body.eventDate ?? null;
   const contactName = body.contactName ?? null;
 
-  // Build prompt
-  const acresLine = assessment?.estimated_total_acres
-    ? `Estimated lot size: ${assessment.estimated_total_acres} acres`
-    : venue.estimated_acres
-    ? `Estimated lot size: ${venue.estimated_acres} acres`
-    : null;
-
-  const prompt = `Draft a professional outreach email to the owner or property manager of ${venue.name} (${venue.address}, ${venue.city}, ${venue.state}) to ask if they would be willing to host a ${eventType}.
-
-Organization: ${orgName}
-Event type: ${eventType}
-${eventDate ? `Target event date: ${eventDate}` : ""}
-${acresLine ?? ""}
-${venue.owner_name ? `Recipient: ${venue.owner_name}` : ""}
-${contactName ? `Sender name: ${contactName}` : ""}
-
-Write a 3-paragraph email:
-1. Who we are and what the program does — safety focus, volunteer-run, community service
-2. What the event involves — one day, 40–60 vehicles max, full cleanup afterward, no property modifications, certificate of insurance provided, no cost to the property owner
-3. A respectful ask — would they be open to a brief conversation about the possibility?
-
-Tone: professional, warm, not pushy. Treat the recipient as a capable adult making a business decision.
-
-Return a JSON object with exactly two fields:
-{
-  "subject": "<concise subject line, under 60 characters>",
-  "body": "<full email body — plain text, no HTML, paragraphs separated by \\n\\n>"
-}
-
-Return ONLY the JSON object. No markdown. No explanation.`;
+  const prompt = buildDraftPrompt({
+    venue,
+    assessment,
+    eventType,
+    orgName,
+    eventDate,
+    contactName,
+  });
 
   // Call Claude
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
