@@ -194,6 +194,9 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
   const [draftError,      setDraftError]      = useState(null);
   const [sending,         setSending]         = useState(false);
   const [emailSent,       setEmailSent]       = useState(false);
+  // Tracks which kind of draft is currently loaded in `draft` so the send
+  // success message and re-draft action can be worded correctly.
+  const [draftKind,       setDraftKind]       = useState("outreach"); // "outreach" | "follow_up"
 
   // Notes state
   const [notes,           setNotes]           = useState([]);
@@ -205,6 +208,19 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
 
   const status = venue.status;
   const pastDue = isPastDue(venue.follow_up_due_at);
+
+  // Follow-up button visibility: contacted venue, prior outreach exists,
+  // last sent > 7 days ago, and no response_received_at on that outreach.
+  // The pipeline endpoint exposes last_outreach_at as MAX(sent_at), and
+  // follow_up_due_at is null only when no future-dated follow-up is queued
+  // AND the latest outreach has no response — same condition the alert
+  // banner uses on the page.
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const followUpEligible =
+    status === "contacted" &&
+    venue.last_outreach_at != null &&
+    Date.now() - new Date(venue.last_outreach_at).getTime() > SEVEN_DAYS_MS &&
+    venue.follow_up_due_at == null;
 
   // Load notes when the venue changes
   useEffect(() => {
@@ -252,6 +268,7 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
   async function draftEmail() {
     setDrafting(true);
     setDraftError(null);
+    setDraftKind("outreach");
     try {
       const res  = await fetch(`/api/admin/venues/${venue.id}/draft-outreach`, {
         method:  "POST",
@@ -260,6 +277,32 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Drafting failed.");
+      setDraft(data);
+    } catch (e) {
+      setDraftError(e.message);
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  // Draft a short follow-up nudge — only valid when followUpEligible is true.
+  // The endpoint inserts its own venue_outreach row and returns the same
+  // { subject, body, outreachId } shape as draft-outreach, so the existing
+  // sendEmail() can deliver it via /api/admin/outreach/[id]/send.
+  async function draftFollowUp() {
+    setShowEmail(true);
+    setEmailSent(false);
+    setDrafting(true);
+    setDraftError(null);
+    setDraftKind("follow_up");
+    try {
+      const res  = await fetch(`/api/admin/venues/${venue.id}/follow-up-draft`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ eventType, orgName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Follow-up drafting failed.");
       setDraft(data);
     } catch (e) {
       setDraftError(e.message);
@@ -400,13 +443,28 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
             )}
 
             {status === "contacted" && (
-              <button
-                onClick={() => onAdvance("responded")}
-                disabled={advancing}
-                className="btn btn-outline w-full justify-center text-sm"
-              >
-                {advancing ? <Spinner /> : "Mark Responded"}
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => onAdvance("responded")}
+                  disabled={advancing}
+                  className="btn btn-outline w-full justify-center text-sm"
+                >
+                  {advancing ? <Spinner /> : "Mark Responded"}
+                </button>
+                {/* Phase 5: one-click follow-up nudge for overdue contacted venues */}
+                {followUpEligible && (
+                  <button
+                    onClick={draftFollowUp}
+                    disabled={drafting}
+                    title="Draft a short check-in email referencing the original outreach"
+                    className="btn btn-outline border-amber-400 text-amber-700 hover:bg-amber-50 w-full justify-center text-sm"
+                  >
+                    {drafting && draftKind === "follow_up"
+                      ? <><Spinner /> Drafting follow-up…</>
+                      : "Send follow-up"}
+                  </button>
+                )}
+              </div>
             )}
 
             {status === "responded" && !showDeclineForm && (
@@ -647,7 +705,11 @@ function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }
               {showEmail && (
                 <div className="px-4 py-4 space-y-3">
                   {emailSent ? (
-                    <div className="notice-success text-sm">Email sent — venue marked as Contacted.</div>
+                    <div className="notice-success text-sm">
+                      {draftKind === "follow_up"
+                        ? "Follow-up sent."
+                        : "Email sent — venue marked as Contacted."}
+                    </div>
                   ) : !draft ? (
                     <>
                       {draftError && <div className="notice-error text-sm" role="alert">{draftError}</div>}
