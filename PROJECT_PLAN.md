@@ -249,7 +249,7 @@ search_profiles (
 - [x] Sent via Resend; outreach record logged with `ai_drafted = TRUE`; venue auto-advanced to Contacted
 - [x] Draft records in Outreach tab have a Send button (no longer a dead end)
 - [x] **Feed assessment notes into draft prompt**: include surface type, usable acres, lot type, and highway access time so the email references specific observed details ("Your 12-acre paved stadium overflow lot 2 minutes from I-75…")
-- [ ] **Follow-up template**: one-click "Send follow-up" on any overdue contacted venue — AI generates a shorter check-in email referencing the original outreach date
+- [x] **Follow-up template**: one-click "Send follow-up" on any overdue contacted venue — AI generates a shorter check-in email referencing the original outreach date
 
 ### Phase 6 — Pipeline Management ✅
 - [x] Kanban board: 8 columns (candidate → shortlisted → contacted → responded → site visit → approved → declined → archived)
@@ -279,8 +279,8 @@ search_profiles (
 - [ ] **Google Places fallback with OSM polygon size gate**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest`, then for each Places hit reverse-query OSM (Overpass `around`/`is_in`) for an overlapping polygon — keep only if a polygon exists and meets the 125,000 sq ft floor; drop polygon-less hits. Catches the "OSM has the polygon but with the wrong tag" case without paying Claude vision cost on undersized lots
 - [x] **Sort by usable acres**: when Claude returned a `usable_acres` value, use it as the primary sort key instead of OSM polygon area, which often over- or under-counts
 - [x] **Composite score recalculation on manual edit**: when an organizer edits `estimated_acres` in the venue form, recompute the size component of `composite_score` automatically
-- [ ] **"Needs revisit" flag**: mark a venue for re-analysis with a reason (e.g., "winter image — re-check in spring", "construction in progress") without changing its pipeline status
-- [ ] **Bulk add to pipeline**: checkbox-select multiple search results and add them all in one action
+- [x] **"Needs revisit" flag**: mark a venue for re-analysis with a reason (e.g., "winter image — re-check in spring", "construction in progress") without changing its pipeline status
+- [x] **Bulk add to pipeline**: checkbox-select multiple search results and add them all in one action
 
 ### Phase 10 — Multi-Org & SaaS
 - [ ] Google OAuth sign-in (easier onboarding than credentials-only)
