@@ -179,9 +179,14 @@ export async function GET(req) {
     })
   );
 
-  // Primary sort: largest usable lot first; ties broken by composite score
+  // Primary sort: largest usable lot first (Claude's usable_acres when available,
+  // since OSM polygon area often over- or under-counts the actually-usable area).
+  // Fall back to OSM polygon acres for unscored candidates so they don't all sink
+  // to the bottom together. Composite score breaks ties.
+  const sortAcres = (p) =>
+    p.usableAcres != null && p.usableAcres > 0 ? p.usableAcres : (p.osmAcres ?? 0);
   scored.sort((a, b) =>
-    (b.osmAcres ?? 0) - (a.osmAcres ?? 0) ||
+    sortAcres(b) - sortAcres(a) ||
     (b.compositeScore ?? 0) - (a.compositeScore ?? 0)
   );
 
