@@ -4,7 +4,7 @@
 **Origin:** Spun off from TRSS Volunteer Management System (arscca-VMS), May 2026
 **Pilot use case:** Tire Rack Street Survival — finding large paved lots for teen driver safety events
 **Broader applicability:** Any event requiring a large flat outdoor site: autocross, car shows, drift days, food truck festivals, community events
-**Status:** Phases 1–3, 5–6 complete; Phases 4, 7, 9 partial; Phases 8, 10 planned
+**Status:** Phases 1–3, 5–7, 9 complete; Phase 6 complete; Phase 4, 8 partial; Phase 10 planned
 **Last Updated:** May 6, 2026
 
 ---
@@ -261,14 +261,14 @@ search_profiles (
 - [x] Timeline linked from pipeline drawer and venue edit panel
 - [x] **Inline notes from pipeline drawer**: add a note without navigating to the timeline page
 - [x] **Drawer stays open on stage advance**: currently closes after advancing; should stay open and reflect the new status
-- [ ] **Drag-to-advance**: drag kanban cards between columns as an alternative to the advance button
+- [x] **Drag-to-advance**: drag kanban cards between columns as an alternative to the advance button
 
 ### Phase 7 — Institutional Memory (partial)
 - [x] Approved venue library (`/admin/library`): all `approved` venues, filterable by state, searchable by name
 - [x] Full venue timeline with notes, outreach, and assessment history
 - [x] Export: approved venues as JSON via `/api/admin/library?export=1`
 - [x] **Declined venue warning**: when adding a search result to the pipeline, check if the `google_place_id` is already in `venues` with status `declined`; surface the decline reason and require confirmation to re-add
-- [ ] **Cross-org sharing**: program admin can mark venues "nationally approved" — visible to all orgs
+- [x] **Cross-org sharing**: program admin can mark venues "nationally approved" — visible to all orgs
 
 ### Phase 8 — arscca-VMS Integration
 - [ ] VMS event creation form: "Select from approved venues" dropdown pre-populated via `/api/v1/approved-venues`
@@ -276,7 +276,7 @@ search_profiles (
 - [x] API key auth on the v1 endpoint (`VENUESCOUT_API_KEY` env var)
 
 ### Phase 9 — Search Quality
-- [ ] **Google Places fallback with OSM polygon size gate**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest`, then for each Places hit reverse-query OSM (Overpass `around`/`is_in`) for an overlapping polygon — keep only if a polygon exists and meets the 125,000 sq ft floor; drop polygon-less hits. Catches the "OSM has the polygon but with the wrong tag" case without paying Claude vision cost on undersized lots
+- [x] **Google Places fallback with OSM polygon size gate**: supplement OSM results with a Google Places Nearby Search for `parking`, `stadium`, and `point_of_interest`, then for each Places hit reverse-query OSM (Overpass `around`/`is_in`) for an overlapping polygon — keep only if a polygon exists and meets the 125,000 sq ft floor; drop polygon-less hits. Catches the "OSM has the polygon but with the wrong tag" case without paying Claude vision cost on undersized lots
 - [x] **Sort by usable acres**: when Claude returned a `usable_acres` value, use it as the primary sort key instead of OSM polygon area, which often over- or under-counts
 - [x] **Composite score recalculation on manual edit**: when an organizer edits `estimated_acres` in the venue form, recompute the size component of `composite_score` automatically
 - [x] **"Needs revisit" flag**: mark a venue for re-analysis with a reason (e.g., "winter image — re-check in spring", "construction in progress") without changing its pipeline status
