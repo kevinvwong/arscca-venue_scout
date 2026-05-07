@@ -98,7 +98,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function KanbanCard({ venue, onClick }) {
+function KanbanCard({ venue, onClick, onDragStart, onDragEnd, isDragging, isInFlight }) {
   const pastDue = isPastDue(venue.follow_up_due_at);
   const lastOutreach = venue.last_outreach_at ? relativeTime(venue.last_outreach_at) : null;
   const ownerIdentified = Boolean(venue.owner_email || venue.owner_phone);
@@ -106,7 +106,12 @@ function KanbanCard({ venue, onClick }) {
   return (
     <button
       onClick={() => onClick(venue)}
-      className="w-full text-left bg-white border border-gray-200 rounded-xl p-3 shadow-sm hover:shadow-md hover:border-brand-300 transition-all group"
+      draggable={!isInFlight}
+      onDragStart={(e) => onDragStart?.(e, venue)}
+      onDragEnd={(e) => onDragEnd?.(e, venue)}
+      className={`w-full text-left bg-white border border-gray-200 rounded-xl p-3 shadow-sm hover:shadow-md hover:border-brand-300 transition-all group ${
+        isDragging ? "opacity-40" : ""
+      } ${isInFlight ? "cursor-wait pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
     >
       <div className="flex items-start justify-between gap-1 mb-1">
         <span className="font-medium text-gray-900 text-sm truncate flex-1 leading-tight">
@@ -147,9 +152,33 @@ function KanbanCard({ venue, onClick }) {
   );
 }
 
-function KanbanColumn({ stage, venues, onCardClick }) {
+function KanbanColumn({
+  stage,
+  venues,
+  onCardClick,
+  onCardDragStart,
+  onCardDragEnd,
+  draggingId,
+  inFlightId,
+  isDropTarget,
+  isInvalidTarget,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+}) {
+  const ringClass = isInvalidTarget
+    ? "ring-2 ring-red-300 bg-red-50"
+    : isDropTarget
+    ? "ring-2 ring-brand-400 bg-brand-50"
+    : "";
+
   return (
-    <div className="flex flex-col min-w-[220px] max-w-[220px] bg-gray-50 rounded-xl border border-gray-200">
+    <div
+      className={`flex flex-col min-w-[220px] max-w-[220px] bg-gray-50 rounded-xl border border-gray-200 transition-all ${ringClass}`}
+      onDragOver={(e) => onDragOver?.(e, stage)}
+      onDragLeave={(e) => onDragLeave?.(e, stage)}
+      onDrop={(e) => onDrop?.(e, stage)}
+    >
       {/* Column header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-200">
         <span className="text-[10px] uppercase tracking-widest font-semibold text-ink-subtle">
@@ -163,7 +192,15 @@ function KanbanColumn({ stage, venues, onCardClick }) {
       {/* Cards */}
       <div className="flex flex-col gap-2 p-2 overflow-y-auto max-h-[calc(100vh-200px)]">
         {venues.map((v) => (
-          <KanbanCard key={v.id} venue={v} onClick={onCardClick} />
+          <KanbanCard
+            key={v.id}
+            venue={v}
+            onClick={onCardClick}
+            onDragStart={onCardDragStart}
+            onDragEnd={onCardDragEnd}
+            isDragging={draggingId === v.id}
+            isInFlight={inFlightId === v.id}
+          />
         ))}
         {venues.length === 0 && (
           <p className="text-[11px] text-gray-400 text-center py-4">No venues</p>
@@ -175,8 +212,8 @@ function KanbanColumn({ stage, venues, onCardClick }) {
 
 // ─── Drawer ───────────────────────────────────────────────────────────────────
 
-function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload }) {
-  const [showDeclineForm, setShowDeclineForm] = useState(false);
+function Drawer({ venue, onClose, onAdvance, advancing, advanceError, onReload, initialDeclineOpen }) {
+  const [showDeclineForm, setShowDeclineForm] = useState(Boolean(initialDeclineOpen));
   const [declineReason,   setDeclineReason]   = useState("");
   const [declineCategory, setDeclineCategory] = useState("");
   const [showSiteVisit,   setShowSiteVisit]   = useState(false);
@@ -922,6 +959,13 @@ export default function PipelinePage() {
   const [selectedVenue,  setSelectedVenue]  = useState(null);
   const [advancing,      setAdvancing]      = useState(false);
   const [advanceError,   setAdvanceError]   = useState(null);
+  const [drawerDeclineOpen, setDrawerDeclineOpen] = useState(false);
+
+  // Drag-and-drop state
+  const [draggingVenue,  setDraggingVenue]  = useState(null); // { id, status }
+  const [dragOverStage,  setDragOverStage]  = useState(null);
+  const [inFlightId,     setInFlightId]     = useState(null);
+  const [dragError,      setDragError]      = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -975,6 +1019,97 @@ export default function PipelinePage() {
     }
   }
 
+  // ─── Drag-and-drop handlers ────────────────────────────────────────────────
+
+  function handleCardDragStart(e, venue) {
+    if (inFlightId === venue.id) {
+      e.preventDefault();
+      return;
+    }
+    setDraggingVenue({ id: venue.id, status: venue.status });
+    setDragError(null);
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      // Some browsers need data set to initiate the drag.
+      try { e.dataTransfer.setData("text/plain", String(venue.id)); } catch {}
+    }
+  }
+
+  function handleCardDragEnd() {
+    setDraggingVenue(null);
+    setDragOverStage(null);
+  }
+
+  function handleColumnDragOver(e, stage) {
+    if (!draggingVenue) return;
+    if (!STAGES.includes(stage)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (dragOverStage !== stage) setDragOverStage(stage);
+  }
+
+  function handleColumnDragLeave(e, stage) {
+    // Only clear if leaving the column entirely (not entering a child).
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    if (dragOverStage === stage) setDragOverStage(null);
+  }
+
+  async function handleColumnDrop(e, stage) {
+    e.preventDefault();
+    const dragged = draggingVenue;
+    setDragOverStage(null);
+    setDraggingVenue(null);
+
+    if (!dragged) return;
+    if (!STAGES.includes(stage)) return;
+    if (dragged.status === stage) return; // no-op on same column
+    if (inFlightId === dragged.id) return; // already advancing
+
+    // Find the full venue row for the drawer / decline modal seed.
+    const venueRow = data?.columns
+      ? Object.values(data.columns).flat().find((v) => v.id === dragged.id)
+      : null;
+
+    // Drag-to-declined surfaces the existing decline form (category + notes)
+    // rather than silently setting the status.
+    if (stage === "declined") {
+      if (venueRow) {
+        setSelectedVenue(venueRow);
+        setAdvanceError(null);
+        setDrawerDeclineOpen(true);
+      }
+      return;
+    }
+
+    // Otherwise advance via the existing endpoint, which accepts an explicit
+    // target status (not just next-stage), so skip-stage drags work directly.
+    setInFlightId(dragged.id);
+    setDragError(null);
+    try {
+      const res  = await fetch(`/api/admin/pipeline/${dragged.id}/advance`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ status: stage }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Advance failed.");
+      const refreshed = await load();
+      // If the drawer is open on this same venue, keep it in sync.
+      if (selectedVenue?.id === dragged.id) {
+        const fromList = refreshed?.columns
+          ? Object.values(refreshed.columns).flat().find((v) => v.id === dragged.id)
+          : null;
+        setSelectedVenue(fromList ?? json.venue ?? { ...selectedVenue, status: stage });
+      }
+    } catch (err) {
+      // On failure the local data is unchanged (we refetch only on success),
+      // so the card naturally "snaps back" to its original column.
+      setDragError(err.message);
+    } finally {
+      setInFlightId(null);
+    }
+  }
+
   const totalCount = data
     ? STAGES.reduce((sum, s) => sum + (data.columns?.[s]?.length ?? 0), 0)
     : 0;
@@ -1020,6 +1155,9 @@ export default function PipelinePage() {
         {error && (
           <div className="notice-error mb-5" role="alert">{error}</div>
         )}
+        {dragError && (
+          <div className="notice-error mb-5" role="alert">{dragError}</div>
+        )}
       </div>
 
       {/* Kanban board — horizontally scrollable */}
@@ -1035,7 +1173,24 @@ export default function PipelinePage() {
                 key={stage}
                 stage={stage}
                 venues={data.columns?.[stage] ?? []}
-                onCardClick={(v) => { setSelectedVenue(v); setAdvanceError(null); }}
+                onCardClick={(v) => { setSelectedVenue(v); setAdvanceError(null); setDrawerDeclineOpen(false); }}
+                onCardDragStart={handleCardDragStart}
+                onCardDragEnd={handleCardDragEnd}
+                draggingId={draggingVenue?.id ?? null}
+                inFlightId={inFlightId}
+                isDropTarget={
+                  dragOverStage === stage &&
+                  draggingVenue != null &&
+                  draggingVenue.status !== stage
+                }
+                isInvalidTarget={
+                  dragOverStage === stage &&
+                  draggingVenue != null &&
+                  draggingVenue.status === stage
+                }
+                onDragOver={handleColumnDragOver}
+                onDragLeave={handleColumnDragLeave}
+                onDrop={handleColumnDrop}
               />
             ))}
           </div>
@@ -1045,12 +1200,14 @@ export default function PipelinePage() {
       {/* Side drawer */}
       {selectedVenue && (
         <Drawer
+          key={selectedVenue.id + (drawerDeclineOpen ? ":decline" : "")}
           venue={selectedVenue}
-          onClose={() => { setSelectedVenue(null); setAdvanceError(null); }}
+          onClose={() => { setSelectedVenue(null); setAdvanceError(null); setDrawerDeclineOpen(false); }}
           onAdvance={advanceVenue}
           advancing={advancing}
           advanceError={advanceError}
           onReload={load}
+          initialDeclineOpen={drawerDeclineOpen}
         />
       )}
     </div>
