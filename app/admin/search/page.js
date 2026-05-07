@@ -105,6 +105,13 @@ export default function SearchPage() {
   const [saveName, setSaveName]           = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // Bulk selection state — keyed by osmId for stable identity across re-renders.
+  const [selectedOsmIds, setSelectedOsmIds] = useState(() => new Set());
+  const [bulkAdding, setBulkAdding]         = useState(false);
+  // Per-row outcome from the most recent batch submit: osmId -> { ok, error? }
+  const [batchOutcome, setBatchOutcome]     = useState({});
+  const [showResultsList, setShowResultsList] = useState(true);
+
   const mapRef      = useRef(null);
   const mapInstance = useRef(null);
   const markersRef  = useRef([]);
@@ -199,6 +206,8 @@ export default function SearchPage() {
     setError(null);
     setSelectedPlace(null);
     setAddedMsg(false);
+    setSelectedOsmIds(new Set());
+    setBatchOutcome({});
 
     try {
       const geoRes = await fetch(
@@ -229,6 +238,191 @@ export default function SearchPage() {
       setSearching(false);
     }
   }, [searchInput, radius]);
+
+  // ----- Bulk selection helpers -----------------------------------------
+
+  const toggleSelected = useCallback((osmId) => {
+    setSelectedOsmIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(osmId)) next.delete(osmId);
+      else next.add(osmId);
+      return next;
+    });
+    // Clear any prior outcome for this row so the row's UI no longer reads
+    // as "added"/"failed" once the user starts a new selection cycle.
+    setBatchOutcome((prev) => {
+      if (!(osmId in prev)) return prev;
+      const next = { ...prev };
+      delete next[osmId];
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedOsmIds(new Set());
+  }, []);
+
+  // Run an async mapper over `items` with at most `limit` in flight at a time.
+  // Used to cap parallelism on the declined-check fan-out below.
+  const mapWithLimit = useCallback(async (items, limit, mapper) => {
+    const out = new Array(items.length);
+    let cursor = 0;
+    async function worker() {
+      while (true) {
+        const i = cursor++;
+        if (i >= items.length) return;
+        out[i] = await mapper(items[i], i);
+      }
+    }
+    const workers = Array.from(
+      { length: Math.min(limit, Math.max(1, items.length)) },
+      () => worker(),
+    );
+    await Promise.all(workers);
+    return out;
+  }, []);
+
+  const venueBodyFromPlace = useCallback((place) => ({
+    name:                 getLotDisplayName(place),
+    address:              place.address     ?? null,
+    lat:                  place.lat,
+    lng:                  place.lng,
+    google_place_id:      place.osmId,
+    source:               "osm",
+    status:               "candidate",
+    estimated_acres:      place.estimatedAcres   ?? null,
+    surface:              place.surfaceType      ?? null,
+    highway_access_score: place.highwayScore     ?? null,
+    owner_name:           place.ownerName        ?? null,
+    owner_phone:          place.ownerPhone       ?? null,
+    owner_email:          place.ownerEmail       ?? null,
+  }), []);
+
+  const handleBulkAdd = useCallback(async () => {
+    if (bulkAdding) return;
+    const ids = Array.from(selectedOsmIds);
+    if (ids.length === 0) return;
+
+    const selectedPlaces = ids
+      .map((id) => places.find((p) => p.osmId === id))
+      .filter(Boolean);
+    if (selectedPlaces.length === 0) return;
+
+    setBulkAdding(true);
+    setError(null);
+
+    try {
+      // 1) Fan out declined-check requests with capped parallelism so we
+      //    don't pound the server for 50+ selections.
+      const declinedFlags = await mapWithLimit(selectedPlaces, 8, async (p) => {
+        try {
+          const r = await fetch(
+            `/api/admin/search/check-declined?place_id=${encodeURIComponent(p.osmId)}`
+          );
+          if (!r.ok) return null;
+          const d = await r.json();
+          return d?.declined ? d : null;
+        } catch {
+          return null; // treat lookup failure as "not declined" — POST will surface real errors
+        }
+      });
+
+      const declinedPlaces = selectedPlaces.filter((_, i) => declinedFlags[i]);
+
+      // 2) If any are previously declined, ask the user once (default = skip).
+      let placesToSubmit = selectedPlaces;
+      if (declinedPlaces.length > 0) {
+        const names = declinedPlaces
+          .slice(0, 8)
+          .map((p) => `  • ${getLotDisplayName(p)}`)
+          .join("\n");
+        const more = declinedPlaces.length > 8
+          ? `\n  …and ${declinedPlaces.length - 8} more`
+          : "";
+        // OK = skip declined (safe default), Cancel = include them all.
+        const skipDeclined = window.confirm(
+          `${declinedPlaces.length} of the ${selectedPlaces.length} selected venue(s) were previously declined:\n\n${names}${more}\n\nClick OK to SKIP the declined venues (recommended), or Cancel to ADD ALL anyway.`
+        );
+        if (skipDeclined) {
+          const declinedSet = new Set(declinedPlaces.map((p) => p.osmId));
+          placesToSubmit = selectedPlaces.filter((p) => !declinedSet.has(p.osmId));
+          if (placesToSubmit.length === 0) {
+            // Mark all as skipped so the UI shows what happened.
+            const outcome = {};
+            for (const p of declinedPlaces) {
+              outcome[p.osmId] = { ok: false, error: "Skipped (previously declined)" };
+            }
+            setBatchOutcome((prev) => ({ ...prev, ...outcome }));
+            setBulkAdding(false);
+            return;
+          }
+        }
+      }
+
+      // 3) Submit the batch.
+      const res = await fetch("/api/admin/venues/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          venues: placesToSubmit.map(venueBodyFromPlace),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Batch add failed");
+
+      // 4) Map results back to osmIds and record outcomes.
+      const outcome = {};
+      const newAdded = new Set(addedOsmIds);
+      const successOsmIds = new Set();
+      for (const r of data.results || []) {
+        const place = placesToSubmit[r.index];
+        if (!place) continue;
+        if (r.ok) {
+          outcome[place.osmId] = { ok: true };
+          newAdded.add(place.osmId);
+          successOsmIds.add(place.osmId);
+        } else {
+          outcome[place.osmId] = { ok: false, error: r.error || "Failed" };
+        }
+      }
+      // If the user chose to skip declined ones, surface that explicitly.
+      if (placesToSubmit.length !== selectedPlaces.length) {
+        const submittedSet = new Set(placesToSubmit.map((p) => p.osmId));
+        for (const p of selectedPlaces) {
+          if (!submittedSet.has(p.osmId)) {
+            outcome[p.osmId] = { ok: false, error: "Skipped (previously declined)" };
+          }
+        }
+      }
+
+      setBatchOutcome((prev) => ({ ...prev, ...outcome }));
+      setAddedOsmIds(newAdded);
+      // Refresh marker icons for newly added rows.
+      successOsmIds.forEach((id) => refreshMarkerIcon(id, newAdded));
+
+      // Uncheck the rows that were successfully added (or skipped) so the
+      // selection only retains rows the user might want to retry.
+      setSelectedOsmIds((prev) => {
+        const next = new Set(prev);
+        for (const [osmId, o] of Object.entries(outcome)) {
+          if (o.ok || o.error?.startsWith("Skipped")) next.delete(osmId);
+        }
+        return next;
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBulkAdding(false);
+    }
+  }, [
+    bulkAdding,
+    selectedOsmIds,
+    places,
+    addedOsmIds,
+    mapWithLimit,
+    venueBodyFromPlace,
+    refreshMarkerIcon,
+  ]);
 
   const handleAddToPipeline = useCallback(async () => {
     if (!selectedPlace) return;
@@ -423,6 +617,14 @@ export default function SearchPage() {
               + Save this search
             </button>
           )}
+          {places.length > 0 && (
+            <button
+              onClick={() => setShowResultsList((v) => !v)}
+              className="ml-auto rounded-full border border-gray-200 bg-white px-3 py-0.5 text-xs text-gray-600 hover:text-teal-600 hover:border-teal-400 transition-colors"
+            >
+              {showResultsList ? "Hide list" : `Show list (${places.length})`}
+            </button>
+          )}
           {showSaveForm && (
             <span className="inline-flex items-center gap-1.5">
               <input
@@ -448,7 +650,125 @@ export default function SearchPage() {
 
       {/* Map + detail panel */}
       <div className="flex flex-1 min-h-0 relative">
+        {/* Results list panel (collapsible) */}
+        {showResultsList && places.length > 0 && (
+          <div className="w-72 shrink-0 bg-white border-r border-gray-200 overflow-y-auto flex flex-col">
+            <div className="px-3 py-2 border-b border-gray-100 sticky top-0 bg-white z-10 flex items-center justify-between">
+              <span className="text-[11px] uppercase tracking-widest font-semibold text-gray-500">
+                {places.length} result{places.length === 1 ? "" : "s"}
+              </span>
+              {selectedOsmIds.size > 0 && (
+                <button
+                  onClick={clearSelection}
+                  className="text-[11px] text-gray-400 hover:text-gray-700"
+                >
+                  Clear ({selectedOsmIds.size})
+                </button>
+              )}
+            </div>
+            <ul className="flex-1">
+              {places.map((p) => {
+                const checked   = selectedOsmIds.has(p.osmId);
+                const outcome   = batchOutcome[p.osmId];
+                const wasAdded  = addedOsmIds.has(p.osmId);
+                const inDb      = p.existingStatus != null;
+                const isSelectedDetail = selectedPlace?.osmId === p.osmId;
+                return (
+                  <li
+                    key={p.osmId}
+                    className={`px-3 py-2 border-b border-gray-100 cursor-pointer transition-colors ${
+                      isSelectedDetail ? "bg-teal-50" : checked ? "bg-amber-50/40" : "hover:bg-gray-50"
+                    }`}
+                    onClick={() => {
+                      setSelectedPlace(p);
+                      setAddedMsg(false);
+                      if (mapInstance.current) {
+                        mapInstance.current.panTo({ lat: p.lat, lng: p.lng });
+                      }
+                    }}
+                  >
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 shrink-0 accent-teal-600 cursor-pointer"
+                        checked={checked}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleSelected(p.osmId)}
+                        aria-label={`Select ${getLotDisplayName(p)}`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-medium text-gray-800 truncate">
+                            {getLotDisplayName(p)}
+                          </p>
+                          {p.compositeScore != null && (
+                            <span className={`text-[10px] font-bold tabular-nums shrink-0 ${
+                              p.compositeScore >= 70 ? "text-green-700" :
+                              p.compositeScore >= 45 ? "text-yellow-700" : "text-red-600"
+                            }`}>
+                              {p.compositeScore}
+                            </span>
+                          )}
+                        </div>
+                        {p.address && (
+                          <p className="text-[11px] text-gray-500 truncate">{p.address}</p>
+                        )}
+                        <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          {(p.usableAcres ?? p.estimatedAcres ?? p.osmAcres) != null && (
+                            <span className="text-[10px] text-gray-500 tabular-nums">
+                              {(p.usableAcres ?? p.estimatedAcres ?? p.osmAcres).toFixed(1)} ac
+                            </span>
+                          )}
+                          {inDb && !wasAdded && (
+                            <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-1.5 py-px ${statusBadgeClass(p.existingStatus)}`}>
+                              {statusLabel(p.existingStatus)}
+                            </span>
+                          )}
+                          {wasAdded && (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-1.5 py-px bg-teal-100 text-teal-800">
+                              Added
+                            </span>
+                          )}
+                          {outcome && !outcome.ok && (
+                            <span
+                              className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-1.5 py-px bg-red-100 text-red-700"
+                              title={outcome.error}
+                            >
+                              {outcome.error?.startsWith("Skipped") ? "Skipped" : "Failed"}
+                            </span>
+                          )}
+                        </div>
+                        {outcome && !outcome.ok && outcome.error && !outcome.error.startsWith("Skipped") && (
+                          <p className="text-[10px] text-red-600 mt-0.5 leading-snug">{outcome.error}</p>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         <div ref={mapRef} className="flex-1 min-w-0 h-full" />
+
+        {/* Floating bulk-add button */}
+        {selectedOsmIds.size > 0 && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20">
+            <button
+              onClick={handleBulkAdd}
+              disabled={bulkAdding}
+              className="btn btn-primary shadow-lg flex items-center gap-2 px-5 py-2.5"
+            >
+              {bulkAdding && (
+                <span className="w-4 h-4 border-2 border-teal-200 border-t-white rounded-full animate-spin" />
+              )}
+              {bulkAdding
+                ? `Adding ${selectedOsmIds.size}…`
+                : `Add ${selectedOsmIds.size} to pipeline`}
+            </button>
+          </div>
+        )}
 
         {/* Empty state */}
         {!searching && places.length === 0 && !error && (
@@ -691,6 +1011,11 @@ export default function SearchPage() {
             <div className="px-4 pb-5 shrink-0">
               {alreadyAdded ? (
                 <p className="text-sm font-medium text-teal-600">Added to pipeline</p>
+              ) : selectedOsmIds.has(selectedPlace.osmId) ? (
+                <p className="text-xs text-gray-500 italic">
+                  Selected for bulk add — use the “Add {selectedOsmIds.size} to pipeline”
+                  button below the map, or uncheck this row to add it individually.
+                </p>
               ) : previouslyDeclined ? (
                 <button
                   className="btn btn-primary w-full flex items-center justify-center gap-2"
